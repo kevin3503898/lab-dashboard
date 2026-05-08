@@ -10,6 +10,8 @@ const PORT = process.env.PORT || 3000;
 
 const TENSILE_PAGE_ID = '2f6f034d3a7480b3ba96c1fb6da3264e';
 
+console.log('[startup] NOTION_TOKEN present:', !!process.env.NOTION_TOKEN);
+
 let notion = null;
 if (process.env.NOTION_TOKEN) {
   notion = new Client({ auth: process.env.NOTION_TOKEN });
