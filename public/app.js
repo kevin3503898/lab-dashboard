@@ -11,9 +11,10 @@ const state = {
   viewMode:     'single',
   tagFilter:    new Set(),   // multi-select: Set of active tag names
   newTagColor:  '#3b82f6',
-  healingA:     null,        // sample name for healing calc
-  healingB:     null,
-  healingDropOpen: null,     // 'A' | 'B' | null
+  healingA:        null,        // sample name for healing calc
+  healingB:        null,
+  healingDropOpen: null,        // 'A' | 'B' | null
+  healingOpen:     false,
 };
 
 /* Chart data palette — vivid for readability */
@@ -46,6 +47,14 @@ function saveTagColor(name, color) {
 }
 function getTagColorFor(name) {
   return getTagColors()[name] || '#7b90a8';
+}
+
+function getManualFiles() {
+  try { return new Set(JSON.parse(localStorage.getItem('lab-manual-files') || '[]')); }
+  catch { return new Set(); }
+}
+function saveManualFiles(s) {
+  localStorage.setItem('lab-manual-files', JSON.stringify([...s]));
 }
 
 /* ── Plotly shared config ── */
@@ -169,6 +178,24 @@ function updateParam(name, key, val) {
   renderTensileChart();
 }
 
+async function deleteFile(name) {
+  await fetch(`/api/tensile/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  // Remove from localStorage manual tracking
+  const mf = getManualFiles(); mf.delete(name); saveManualFiles(mf);
+  // Remove from state
+  state.tensileFiles = state.tensileFiles.filter(f => f.name !== name);
+  state.selectedFiles.delete(name);
+  // If nothing selected, select first available
+  if (state.selectedFiles.size === 0 && state.tensileFiles.length > 0) {
+    state.selectedFiles.add(state.tensileFiles[0].name);
+  }
+  renderFileSelector();
+  renderTagSection();
+  if (state.tensileFiles.length) renderTensileChart();
+  else document.getElementById('chart-tensile').innerHTML =
+    '<div class="empty-state"><span class="empty-icon">📂</span><p>No samples loaded</p></div>';
+}
+
 /* ── File selector (toggle buttons) ── */
 function renderFileSelector() {
   const el = document.getElementById('file-selector');
@@ -203,6 +230,10 @@ function renderFileSelector() {
       ? `<div class="file-btn-tags">${assignedTags.map(t => `<span class="file-tag-dot" style="background:${getTagColorFor(t)}"></span>`).join('')}</div>`
       : '';
 
+    const delBtn = f.source === 'manual'
+      ? `<button class="file-del-btn" title="Remove" onclick="event.stopPropagation();deleteManualFile(${esc(f.name)})">✕</button>`
+      : '';
+
     const divider = vi > 0 ? '<div class="selector-divider"></div>' : '';
     return `${divider}
       <button class="file-toggle-btn ${on ? 'on' : ''}" style="--fc:${color}"
@@ -213,10 +244,37 @@ function renderFileSelector() {
           <span class="file-btn-date">${dateStr}</span>
           ${tagDotsHTML}
         </div>
+        ${delBtn}
       </button>`;
   }).join('');
 
   el.innerHTML = `<div class="file-selector-list">${items}</div>`;
+}
+
+async function deleteManualFile(name) {
+  await fetch('/api/delete-csv', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  state.tensileFiles = state.tensileFiles.filter(f => f.name !== name);
+  state.selectedFiles.delete(name);
+  // Remove from tags
+  const tags = getTags();
+  Object.keys(tags).forEach(t => {
+    tags[t] = (tags[t] || []).filter(n => n !== name);
+  });
+  setTags(tags);
+  if (state.tensileFiles.length > 0) {
+    if (state.selectedFiles.size === 0) state.selectedFiles.add(state.tensileFiles[0].name);
+    renderFileSelector();
+    renderTagSection();
+    renderTensileChart();
+  } else {
+    showTensileEmpty();
+    renderFileSelector();
+    renderTagSection();
+  }
 }
 
 function toggleFile(name) {
@@ -608,6 +666,12 @@ function renderMetricsTable() {
 /* ═══════════════════════════════════════
    SELF-HEALING EFFICIENCY OVERLAY
 ═══════════════════════════════════════ */
+function toggleHealingPanel() {
+  state.healingOpen = !state.healingOpen;
+  state.healingDropOpen = null;
+  renderHealingCalc(state.tensileFiles.filter(f => state.selectedFiles.has(f.name)));
+}
+
 function renderHealingCalc(files) {
   const chartEl = document.getElementById('chart-tensile');
   const existing = document.getElementById('healing-overlay');
@@ -652,14 +716,34 @@ function renderHealingCalc(files) {
   const overlay = document.createElement('div');
   overlay.id = 'healing-overlay';
   overlay.style.opacity = '0';   // hidden until positioned
-  overlay.innerHTML = `
-    <div class="ho-label">Self-Healing Efficiency</div>
-    <div class="ho-row">
-      ${mkDrop('A', state.healingA)}
-      <span class="ho-op">÷</span>
-      ${mkDrop('B', state.healingB)}
-    </div>
-    <div class="ho-result">${effHTML}</div>`;
+
+  if (!state.healingOpen) {
+    overlay.innerHTML = `
+      <button class="ho-toggle-btn" onclick="toggleHealingPanel()">
+        <span class="ho-toggle-icon">%</span>
+        <span class="ho-toggle-text">Healing</span>
+        <svg class="ho-toggle-chevron" width="8" height="8" viewBox="0 0 8 8" fill="none">
+          <path d="M1.5 2.5L4 5L6.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>`;
+  } else {
+    overlay.innerHTML = `
+      <button class="ho-toggle-btn ho-toggle-open" onclick="toggleHealingPanel()">
+        <span class="ho-toggle-icon">%</span>
+        <span class="ho-toggle-text">Healing</span>
+        <svg class="ho-toggle-chevron" width="8" height="8" viewBox="0 0 8 8" fill="none" style="transform:rotate(180deg)">
+          <path d="M1.5 2.5L4 5L6.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <div class="ho-body">
+        <div class="ho-row">
+          ${mkDrop('A', state.healingA)}
+          <span class="ho-op">÷</span>
+          ${mkDrop('B', state.healingB)}
+        </div>
+        <div class="ho-result">${effHTML}</div>
+      </div>`;
+  }
 
   chartEl.style.position = 'relative';
   chartEl.appendChild(overlay);
@@ -744,6 +828,7 @@ function setupUpload() {
         });
         const d = await r.json();
         if (d.success) {
+          const mf = getManualFiles(); mf.add(file.name); saveManualFiles(mf);
           status.textContent = `✅ ${file.name}: ${d.rows} 行, 欄位: ${d.columns.join(', ')}`;
           ok++;
         } else {

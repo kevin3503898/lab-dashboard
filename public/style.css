@@ -173,7 +173,7 @@ header h1 {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 8px 9px; border-radius: 8px; cursor: pointer;
   border: 1px solid transparent; background: transparent; color: var(--text-2);
-  transition: all 0.18s; text-align: left;
+  transition: all 0.18s; text-align: left; position: relative;
 }
 .file-toggle-btn:hover { background: var(--bg); }
 .file-toggle-btn.on {
@@ -193,6 +193,31 @@ header h1 {
 .file-tag-dot   { width: 5px; height: 5px; border-radius: 50%; }
 
 .selector-divider { height: 1px; background: var(--bg); margin: 1px 0; }
+
+/* ── Manual file delete button ── */
+.file-del-btn {
+  position: absolute; top: 50%; right: 5px;
+  transform: translateY(-50%);
+  width: 16px; height: 16px; border-radius: 50%;
+  background: none; border: none; cursor: pointer;
+  font-size: 0.58rem; color: var(--text-3);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 0.15s, background 0.15s, color 0.15s;
+  line-height: 1; padding: 0; flex-shrink: 0;
+}
+.file-toggle-btn:hover .file-del-btn { opacity: 1; }
+.file-del-btn:hover { background: #fee2e2 !important; color: #ef4444 !important; }
+
+.file-delete-btn {
+  margin-left: auto; flex-shrink: 0;
+  background: none; border: none; cursor: pointer;
+  font-size: 0.85rem; line-height: 1;
+  color: var(--text-3); opacity: 0;
+  padding: 2px 4px; border-radius: 4px;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+.file-toggle-btn:hover .file-delete-btn { opacity: 1; }
+.file-delete-btn:hover { color: #c0392b; background: #fdecea; opacity: 1; }
 
 /* ═══════════════════════════════════════
    DEDICATED TAG PANEL
@@ -385,24 +410,52 @@ header h1 {
 .mr-val em { font-style: normal; font-size: 0.62rem; color: var(--text-3); margin-left: 1px; }
 
 /* ─── Self-Healing Efficiency overlay (inside chart, below legend) ─── */
+/* collapsed state is default */
 #healing-overlay {
   position: absolute;
   /* top / right / min-width set dynamically by positionHealingOverlay() */
-  min-width: 148px;
-  background: rgba(255,255,255,0.95);
+  min-width: 90px;
+  background: rgba(255,255,255,0.93);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 9px 11px 11px;
+  border-radius: 20px;   /* pill when collapsed */
+  padding: 0;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  box-shadow: 0 2px 12px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 6px rgba(0,0,0,0.07);
   z-index: 10;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, border-radius 0.18s ease;
+  overflow: visible;
 }
+
+/* expanded: square corners */
+#healing-overlay:has(.ho-body) {
+  border-radius: var(--radius-sm);
+  min-width: 148px;
+}
+
+.ho-toggle-btn {
+  display: flex; align-items: center; gap: 5px;
+  width: 100%; padding: 5px 10px;
+  background: none; border: none; cursor: pointer;
+  font-size: 0.68rem; font-weight: 600; color: var(--text-2);
+  font-family: inherit; letter-spacing: 0.02em;
+  border-radius: 20px;
+  transition: color 0.15s;
+}
+.ho-toggle-btn:hover { color: var(--accent); }
+.ho-toggle-open { border-bottom: 1px solid var(--border); border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+
+.ho-toggle-icon { font-size: 0.72rem; color: var(--accent); }
+.ho-toggle-text { flex: 1; text-align: left; }
+.ho-toggle-chevron { color: var(--text-3); flex-shrink: 0; }
+
 .ho-label {
   font-size: 0.6rem; font-weight: 600; letter-spacing: 0.07em;
   text-transform: uppercase; color: var(--text-3); margin-bottom: 7px;
 }
+
+.ho-body { padding: 8px 10px 10px; }
+
 .ho-row {
   display: flex; align-items: center; gap: 5px;
 }

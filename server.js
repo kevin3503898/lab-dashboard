@@ -3,6 +3,7 @@ const express = require('express');
 const { Client } = require('@notionhq/client');
 const axios = require('axios');
 const { parse } = require('csv-parse/sync');
+const XLSX = require('xlsx');
 const path = require('path');
 
 const app = express();
@@ -78,7 +79,8 @@ async function fetchTensileCSVs() {
 
     const fileObj = block.file;
     const name = fileObj.name || 'unknown.csv';
-    if (!name.toLowerCase().endsWith('.csv')) continue;
+    const ext = name.toLowerCase().match(/\.(csv|txt|xlsx)$/)?.[1];
+    if (!ext) continue;
 
     const url = fileObj.type === 'file'
       ? fileObj.file?.url
@@ -87,14 +89,27 @@ async function fetchTensileCSVs() {
     if (!url) continue;
 
     try {
-      const { data: csvText } = await axios.get(url, { timeout: 15000, responseType: 'text' });
-      const rawRows = parse(csvText, {
-        columns: true,
-        skip_empty_lines: true,
-        trim: true,
-        relax_column_count: true,
-        bom: true,
-      });
+      let rawRows;
+      if (ext === 'xlsx') {
+        const { data } = await axios.get(url, { timeout: 15000, responseType: 'arraybuffer' });
+        const wb = XLSX.read(Buffer.from(data), { type: 'buffer' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        rawRows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+      } else {
+        const { data: csvText } = await axios.get(url, { timeout: 15000, responseType: 'text' });
+        const parseOpts = {
+          columns: true,
+          skip_empty_lines: true,
+          trim: true,
+          relax_column_count: true,
+          bom: true,
+        };
+        rawRows = parse(csvText, { ...parseOpts, delimiter: ext === 'txt' ? '\t' : ',' });
+        // For .txt files, fall back to comma delimiter if tab-split yields only 1 column
+        if (ext === 'txt' && rawRows.length > 0 && Object.keys(rawRows[0]).length <= 1) {
+          rawRows = parse(csvText, parseOpts);
+        }
+      }
       const { rows, columns, meta } = cleanMachineCSV(rawRows);
       results.push({
         name, rows, columns,
@@ -142,7 +157,7 @@ app.post('/api/upload-csv', (req, res) => {
       bom: true,
     });
     const { rows, columns, meta } = cleanMachineCSV(rawRows);
-    const file = { name, rows, columns, meta };
+    const file = { name, rows, columns, meta, source: 'manual' };
 
     const existing = getCache('tensile') || [];
     const idx = existing.findIndex(f => f.name === name);
@@ -154,6 +169,15 @@ app.post('/api/upload-csv', (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+app.delete('/api/tensile/:filename', (req, res) => {
+  const filename = decodeURIComponent(req.params.filename);
+  const existing = getCache('tensile');
+  if (!existing) return res.json({ success: true });
+  const updated = existing.filter(f => f.name !== filename);
+  setCache('tensile', updated);
+  res.json({ success: true, removed: existing.length - updated.length });
 });
 
 app.get('/api/formulations', (req, res) => {
