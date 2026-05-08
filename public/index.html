@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PVP/β-CD/AzoIL Dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- Header -->
+    <header>
+      <div>
+        <h1>PVP / β-CD / AzoIL Project</h1>
+        <p class="subtitle">實驗數據視覺化儀表板</p>
+      </div>
+      <div class="header-actions">
+        <span id="statusBadge" class="badge badge-gray">檢查連線中…</span>
+        <button id="refreshBtn" class="btn btn-primary">⟳ 從 Notion 更新</button>
+      </div>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="tensile">📈 拉力</button>
+      <button class="tab-btn" data-tab="electrical">⚡ 電性</button>
+      <button class="tab-btn" data-tab="dsc">🌡️ DSC</button>
+    </nav>
+
+    <!-- Main Content -->
+    <main>
+
+      <!-- ===== 拉力 Tab ===== -->
+      <div id="tab-tensile" class="tab-content active">
+
+        <!-- LEFT COLUMN: Sample Selector + Tag Panel -->
+        <div class="t-left-col">
+
+          <aside class="t-left">
+            <div class="tl-block">
+              <div class="tl-label">View Mode</div>
+              <div class="mode-btns" id="modeBtns">
+                <button class="mode-btn active" data-mode="single">
+                  <span class="mode-icon">◉</span> Single
+                </button>
+                <button class="mode-btn" data-mode="overlay">
+                  <span class="mode-icon">⊕</span> Overlay
+                </button>
+              </div>
+            </div>
+
+            <div class="tl-block tl-grow">
+              <div class="tl-label">Sample Selection</div>
+              <div id="file-selector"></div>
+            </div>
+
+            <div class="tl-block tl-upload">
+              <div class="tl-label">Manual Upload</div>
+              <input type="file" id="csvInput" accept=".csv" multiple>
+              <button id="uploadBtn" class="btn btn-secondary btn-sm">Upload CSV</button>
+              <div id="uploadStatus"></div>
+            </div>
+          </aside>
+
+          <!-- DEDICATED TAG PANEL -->
+          <div class="t-tag-panel">
+            <div class="tag-panel-title">Tags</div>
+            <div id="tag-section"></div>
+          </div>
+
+        </div>
+
+        <!-- CENTER: Chart + Metrics -->
+        <div class="t-center panel flex-col">
+          <div class="chart-controls">
+            <h2>Tensile Test</h2>
+            <div class="btn-group">
+              <button class="chart-btn active" data-chart="stress-strain">Stress–Strain</button>
+              <button class="chart-btn" data-chart="force-disp">Force–Displacement</button>
+            </div>
+          </div>
+          <div id="chart-tensile" class="chart-area tensile-chart">
+            <div class="empty-state">
+              <span class="empty-icon">📂</span>
+              <p>Loading data…</p>
+            </div>
+          </div>
+          <div id="metrics-table"></div>
+        </div>
+
+        <!-- RIGHT: Sample Info -->
+        <aside class="t-right">
+          <div class="tl-label">Sample Info</div>
+          <div id="tensile-info">
+            <p class="hint">Load CSV to view stats</p>
+          </div>
+        </aside>
+
+      </div>
+
+      <!-- ===== 電性 Tab ===== -->
+      <div id="tab-electrical" class="tab-content">
+        <div class="empty-panel">
+          <span class="empty-icon">⚡</span>
+          <h2>電性測量</h2>
+          <p>Notion 「電性」頁面目前尚無資料。<br>待新增測量數據後，重新整理即可顯示。</p>
+        </div>
+      </div>
+
+      <!-- ===== DSC Tab ===== -->
+      <div id="tab-dsc" class="tab-content">
+        <div class="empty-panel">
+          <span class="empty-icon">🌡️</span>
+          <h2>DSC 量熱分析</h2>
+          <p>Notion 「DSC」頁面目前尚無資料。<br>待新增測量數據後，重新整理即可顯示。</p>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
