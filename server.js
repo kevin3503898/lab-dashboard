@@ -123,7 +123,10 @@ async function fetchTensileCSVs() {
   return results;
 }
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Disable browser caching in dev so CSS/JS changes are always picked up
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store'),
+}));
 app.use(express.json({ limit: '20mb' }));
 
 app.get('/api/status', (req, res) => {

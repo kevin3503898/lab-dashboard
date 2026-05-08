@@ -11,6 +11,7 @@ const state = {
   viewMode:     'single',
   tagFilter:    new Set(),   // multi-select: Set of active tag names
   newTagColor:  '#3b82f6',
+  paletteOpen:     false,       // tag color picker popover
   healingA:        null,        // sample name for healing calc
   healingB:        null,
   healingDropOpen: null,        // 'A' | 'B' | null
@@ -22,13 +23,35 @@ const PALETTE = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#8b5cf6','#ec4899','#0
 
 /* Swatch palette (vivid + Morandi mix) */
 const SWATCH_COLORS = [
-  '#3b82f6','#ef4444','#22c55e','#f59e0b',
-  '#8b5cf6','#ec4899','#06b6d4','#f97316',
-  '#7b90a8','#b07d75','#7d9e87','#c4a872',
+  '#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#3b82f6',
+  '#8b5cf6','#ec4899','#f43f5e','#84cc16','#14b8a6','#a855f7',
+  '#7b90a8','#b07d75','#7d9e87','#c4a872','#9e8fa0','#7a8c6e',
+  '#64748b','#78716c','#6b7280','#475569','#52525b','#57534e',
 ];
 
 /* Safely embed JSON.stringify output inside a double-quoted HTML attribute */
 function esc(val) { return JSON.stringify(val).replace(/"/g, '&quot;'); }
+
+function makeDraggable(el, handle) {
+  handle = handle || el;
+  handle.style.cursor = 'move';
+  handle.onmousedown = function(e) {
+    if (e.target.closest('button')) return;
+    const startX = e.clientX - el.offsetLeft;
+    const startY = e.clientY - el.offsetTop;
+    function onMove(e) {
+      el.style.left = Math.max(0, e.clientX - startX) + 'px';
+      el.style.top  = Math.max(0, e.clientY - startY) + 'px';
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    e.preventDefault();
+  };
+}
 
 /* ── Tag localStorage helpers ── */
 function getTags() {
@@ -57,15 +80,50 @@ function saveManualFiles(s) {
   localStorage.setItem('lab-manual-files', JSON.stringify([...s]));
 }
 
+/* ── Display name overrides (localStorage) ── */
+function getDisplayNames() {
+  try { return JSON.parse(localStorage.getItem('lab-display-names') || '{}'); }
+  catch { return {}; }
+}
+function saveDisplayName(fileName, displayName) {
+  const names = getDisplayNames();
+  const trimmed = (displayName || '').trim();
+  if (trimmed) names[fileName] = trimmed; else delete names[fileName];
+  localStorage.setItem('lab-display-names', JSON.stringify(names));
+}
+function getDisplayName(fileName) {
+  const names = getDisplayNames();
+  return names[fileName] || fileName.replace(/\.(csv|txt|xlsx)$/i, '');
+}
+
 /* ── Plotly shared config ── */
-const PLOTLY_CONFIG = { responsive: true, displayModeBar: true, displaylogo: false,
-  modeBarButtonsToRemove: ['lasso2d','select2d'] };
+const PLOTLY_CONFIG = {
+  responsive: true, displayModeBar: false,  // custom modebar replaces Plotly's
+  displaylogo: false,
+};
+
+/* ── Publication-quality axis style (shared) ── */
+const PUB_AXIS = {
+  showline:    true,
+  mirror:      true,          // draw axis line on all 4 sides (no ticks on top/right)
+  linecolor:   '#000000',
+  linewidth:   1.5,
+  ticks:       'outside',     // ticks point outward
+  ticklen:     5,
+  tickwidth:   1.5,
+  tickcolor:   '#000000',
+  tickfont:    { size: 16, color: '#000000', family: 'Arial, Helvetica, sans-serif' },
+  nticks:      6,             // target 4–7 ticks per axis
+  showgrid:    false,
+  zeroline:    false,
+  automargin:  true,
+};
 
 const BASE_LAYOUT = {
-  plot_bgcolor:  '#faf9f7',
+  plot_bgcolor:  '#ffffff',
   paper_bgcolor: '#ffffff',
-  font: { family: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif', size: 12 },
-  margin: { t: 40, r: 16, b: 48, l: 52 },
+  font: { family: 'Arial, Helvetica, sans-serif', size: 12, color: '#000000' },
+  margin: { t: 14, r: 16, b: 55, l: 75 },
   hoverlabel: { bgcolor: '#1c1917', font: { color: '#f2f0ec' } },
 };
 
@@ -78,11 +136,17 @@ async function init() {
   setupModeButtons();
   setupRefresh();
   setupUpload();
-  // Close healing dropdowns when clicking outside
+  // Close dropdowns / popovers when clicking outside
   document.addEventListener('click', e => {
-    if (state.healingDropOpen && !e.target.closest('#healing-overlay')) {
+    // Close healing sample dropdowns
+    if (state.healingDropOpen && !e.target.closest('#healing-panel')) {
       state.healingDropOpen = null;
       document.querySelectorAll('.ho-drop').forEach(d => d.classList.remove('open'));
+    }
+    // Close tag colour picker when clicking outside
+    if (state.paletteOpen && !e.target.closest('.tag-palette-wrap')) {
+      state.paletteOpen = false;
+      renderTagSection();
     }
   });
   await checkStatus();
@@ -152,7 +216,7 @@ function initSampleParams() {
 function renderMetaInputs() {
   document.getElementById('meta-inputs').innerHTML = state.tensileFiles.map(f => {
     const p  = state.sampleParams[f.name];
-    const sn = f.name.replace('.csv', '');
+    const sn = getDisplayName(f.name);
     return `
       <div class="meta-group">
         <div class="meta-group-title">${sn}</div>
@@ -178,25 +242,50 @@ function updateParam(name, key, val) {
   renderTensileChart();
 }
 
-async function deleteFile(name) {
-  await fetch(`/api/tensile/${encodeURIComponent(name)}`, { method: 'DELETE' });
-  // Remove from localStorage manual tracking
-  const mf = getManualFiles(); mf.delete(name); saveManualFiles(mf);
-  // Remove from state
-  state.tensileFiles = state.tensileFiles.filter(f => f.name !== name);
-  state.selectedFiles.delete(name);
-  // If nothing selected, select first available
-  if (state.selectedFiles.size === 0 && state.tensileFiles.length > 0) {
-    state.selectedFiles.add(state.tensileFiles[0].name);
+/* ── File selector (toggle buttons) ── */
+let _fileClickTimer = null, _fileClickName = null;
+function handleFileBtnClick(e, name) {
+  if (_fileClickName === name && _fileClickTimer) {
+    clearTimeout(_fileClickTimer);
+    _fileClickTimer = null; _fileClickName = null;
+    startRename(name, e);
+    return;
   }
-  renderFileSelector();
-  renderTagSection();
-  if (state.tensileFiles.length) renderTensileChart();
-  else document.getElementById('chart-tensile').innerHTML =
-    '<div class="empty-state"><span class="empty-icon">📂</span><p>No samples loaded</p></div>';
+  _fileClickName = name;
+  _fileClickTimer = setTimeout(() => {
+    _fileClickTimer = null; _fileClickName = null;
+    toggleFile(name);
+  }, 230);
 }
 
-/* ── File selector (toggle buttons) ── */
+function startRename(fileName, e) {
+  const btn = e.target.closest('.file-toggle-btn');
+  if (!btn) return;
+  const nameEl = btn.querySelector('.file-btn-name');
+  if (!nameEl) return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = getDisplayName(fileName);
+  input.className = 'file-rename-input';
+  input.maxLength = 50;
+  input.onclick = ev => ev.stopPropagation();
+  input.ondblclick = ev => ev.stopPropagation();
+  const commit = () => {
+    saveDisplayName(fileName, input.value);
+    renderFileSelector();
+    if (state.tensileFiles.length) renderTensileChart();
+  };
+  input.onblur = commit;
+  input.onkeydown = ev => {
+    if (ev.key === 'Enter') input.blur();
+    if (ev.key === 'Escape') { renderFileSelector(); }
+    ev.stopPropagation();
+  };
+  nameEl.replaceWith(input);
+  input.select();
+  input.focus();
+}
+
 function renderFileSelector() {
   const el = document.getElementById('file-selector');
   if (!el) return;
@@ -214,12 +303,12 @@ function renderFileSelector() {
 
   const items = source.map((f, vi) => {
     const i     = state.tensileFiles.indexOf(f);
-    const label = f.name.replace('.csv', '');
+    const label = getDisplayName(f.name);
     const on    = state.selectedFiles.has(f.name);
     const color = PALETTE[i % PALETTE.length];
 
     const rawDate = f.meta?.lastEditedTime || f.meta?.createdTime;
-    let dateStr = '—';
+    let dateStr = '';
     if (rawDate) {
       const d = new Date(rawDate);
       dateStr = `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -237,11 +326,12 @@ function renderFileSelector() {
     const divider = vi > 0 ? '<div class="selector-divider"></div>' : '';
     return `${divider}
       <button class="file-toggle-btn ${on ? 'on' : ''}" style="--fc:${color}"
-        onclick="toggleFile(${esc(f.name)})">
+        title="Original: ${f.name}"
+        onclick="handleFileBtnClick(event, ${esc(f.name)})">
         <span class="file-dot"></span>
         <div class="file-btn-info">
           <span class="file-btn-name">${label}</span>
-          <span class="file-btn-date">${dateStr}</span>
+          ${dateStr ? `<span class="file-btn-date">${dateStr}</span>` : ''}
           ${tagDotsHTML}
         </div>
         ${delBtn}
@@ -252,11 +342,7 @@ function renderFileSelector() {
 }
 
 async function deleteManualFile(name) {
-  await fetch('/api/delete-csv', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
+  await fetch(`/api/tensile/${encodeURIComponent(name)}`, { method: 'DELETE' });
   state.tensileFiles = state.tensileFiles.filter(f => f.name !== name);
   state.selectedFiles.delete(name);
   // Remove from tags
@@ -323,7 +409,7 @@ function renderTagSection() {
 
   /* 2 — Assign tags to selected sample */
   const selName  = [...state.selectedFiles][0] || null;
-  const selLabel = selName ? selName.replace('.csv', '') : null;
+  const selLabel = selName ? getDisplayName(selName) : null;
   const assignHTML = (selName && names.length) ? `
     <div class="tag-section-group">
       <div class="tag-section-label">Assign to <span class="tag-assign-selected">${selLabel}</span></div>
@@ -348,8 +434,18 @@ function renderTagSection() {
   const createHTML = `
     <div class="tag-section-group">
       <div class="tag-section-label">New tag</div>
-      <div class="tag-swatches">${swatchesHTML}</div>
       <div class="tag-add-row">
+        <div class="tag-palette-wrap">
+          <button class="tag-palette-btn" style="--sc:${state.newTagColor}"
+            title="Choose colour" onclick="togglePalette(event)"></button>
+          <div class="tag-palette-pop ${state.paletteOpen ? 'open' : ''}">
+            ${swatchesHTML}
+            <label class="tag-eyedropper" title="Custom colour">
+              <input type="color" value="${state.newTagColor}" oninput="selectTagColor(this.value)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7l-8.5-8.5-9.5 9.5L11 17l9-10z"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
+            </label>
+          </div>
+        </div>
         <input type="text" id="tagInput" class="tag-input" placeholder="Tag name…" maxlength="20"
           onkeydown="if(event.key==='Enter')addTag(document.getElementById('tagInput').value)">
         <button class="tag-add-btn" onclick="addTag(document.getElementById('tagInput').value)">+</button>
@@ -361,7 +457,19 @@ function renderTagSection() {
 
 function selectTagColor(color) {
   state.newTagColor = color;
+  state.paletteOpen = false;  // close picker after selection
   renderTagSection();
+}
+
+function togglePalette(e) {
+  e.stopPropagation();
+  state.paletteOpen = !state.paletteOpen;
+  renderTagSection();
+  // Restore focus to the text input
+  requestAnimationFrame(() => {
+    const inp = document.getElementById('tagInput');
+    if (inp && !state.paletteOpen) inp.focus();
+  });
 }
 
 function addTag(name) {
@@ -373,6 +481,7 @@ function addTag(name) {
     setTags(tags);
     saveTagColor(name, state.newTagColor);
   }
+  state.paletteOpen = false;
   renderTagSection();
   const inp = document.getElementById('tagInput');
   if (inp) inp.value = '';
@@ -426,6 +535,7 @@ function setupModeButtons() {
       }
       renderFileSelector();
       renderTagSection();
+      updateHealingBtn(state.tensileFiles.filter(f => state.selectedFiles.has(f.name)));
       if (state.tensileFiles.length) renderTensileChart();
     });
   });
@@ -467,7 +577,7 @@ async function renderTensileChart() {
     const cols  = detectCols(file.rows);
     const p     = state.sampleParams[file.name] || { thickness:1, width:5, gaugeLength:20 };
     const area  = p.thickness * p.width;
-    const label = file.name.replace('.csv','');
+    const label = getDisplayName(file.name);
 
     let xRaw, yRaw;
 
@@ -554,30 +664,94 @@ async function renderTensileChart() {
     return;
   }
 
-  const selectedLabel = Array.from(state.selectedFiles)
-    .map(n => n.replace('.csv', '')).join(' vs ');
-  const chartTitle = isStressStrain
-    ? (isOverlay ? `Stress–Strain: ${selectedLabel}` : `Stress–Strain Curve`)
-    : (isOverlay ? `Force–Displacement: ${selectedLabel}` : `Force–Displacement Curve`);
+  // Legend inside the plot — top-left corner, semi-transparent bg
+  const legendConfig = isOverlay
+    ? { orientation: 'v', x: 0.02, y: 0.98, xanchor: 'left', yanchor: 'top',
+        font: { size: 20, family: 'Arial, Helvetica, sans-serif', color: '#000000' },
+        bgcolor: 'rgba(255,255,255,0.82)', borderwidth: 0 }
+    : {};
 
   const layout = {
     ...BASE_LAYOUT,
-    title: { text: chartTitle, font: { size: 14 } },
-    xaxis: { title: xTitle, gridcolor: '#e2e8f0', zeroline: true },
-    yaxis: { title: yTitle, gridcolor: '#e2e8f0', zeroline: true },
+    xaxis: { ...PUB_AXIS, title: { text: xTitle, font: { size: 22, color: '#000000' }, standoff: 10 } },
+    yaxis: { ...PUB_AXIS, title: { text: yTitle, font: { size: 22, color: '#000000' }, standoff: 10 } },
     hovermode: isOverlay ? 'x unified' : 'closest',
-    legend: isOverlay
-      ? { orientation: 'v', x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top',
-          font: { size: 11 }, bgcolor: 'rgba(255,255,255,0.88)',
-          bordercolor: '#e2e8f0', borderwidth: 1 }
-      : {},
+    legend: legendConfig,
     showlegend: isOverlay,
-    margin: { ...BASE_LAYOUT.margin, r: 16 },
   };
 
   await Plotly.newPlot('chart-tensile', traces, layout, PLOTLY_CONFIG);
   renderMetricsTable();
   renderHealingCalc(state.tensileFiles.filter(f => state.selectedFiles.has(f.name)));
+}
+
+/* ═══════════════════════════════════════
+   CUSTOM MODEBAR ACTIONS
+═══════════════════════════════════════ */
+function downloadChart() {
+  Plotly.downloadImage('chart-tensile', {
+    format: 'png', filename: 'stress_strain', width: 560, height: 420, scale: 3,
+  });
+}
+
+function setDragMode(mode) {
+  Plotly.relayout('chart-tensile', { dragmode: mode });
+  document.getElementById('mbZoom').classList.toggle('active', mode === 'zoom');
+  document.getElementById('mbPan').classList.toggle('active', mode === 'pan');
+}
+
+function zoomChart(factor) {
+  const gd = document.getElementById('chart-tensile');
+  if (!gd._fullLayout) return;
+  const xa = gd._fullLayout.xaxis, ya = gd._fullLayout.yaxis;
+  const xmid = (xa.range[0] + xa.range[1]) / 2;
+  const ymid = (ya.range[0] + ya.range[1]) / 2;
+  Plotly.relayout('chart-tensile', {
+    'xaxis.range': [xmid - (xa.range[1]-xa.range[0])/2*factor, xmid + (xa.range[1]-xa.range[0])/2*factor],
+    'yaxis.range': [ymid - (ya.range[1]-ya.range[0])/2*factor, ymid + (ya.range[1]-ya.range[0])/2*factor],
+  });
+}
+
+function resetAxes() {
+  Plotly.relayout('chart-tensile', { 'xaxis.autorange': true, 'yaxis.autorange': true });
+}
+
+async function exportToXLSX() {
+  if (typeof XLSX === 'undefined') { alert('SheetJS not loaded'); return; }
+  const selectedFiles = state.tensileFiles.filter(f => state.selectedFiles.has(f.name));
+  if (!selectedFiles.length) { alert('No samples selected'); return; }
+
+  const wb = XLSX.utils.book_new();
+
+  // Summary sheet
+  const summaryRows = [['Sample', 'Max Stress (MPa)', 'Strain at UTS (%)', 'Toughness (kJ/m³)', "Young's Modulus (kPa)"]];
+  selectedFiles.forEach(file => {
+    const m = calcMetrics(file);
+    summaryRows.push([
+      getDisplayName(file.name),
+      m ? +m.maxStress.toFixed(6) : 'N/A',
+      m ? +m.maxStrain.toFixed(3) : 'N/A',
+      m ? +(m.toughness * 1000).toFixed(4) : 'N/A',
+      (m && m.modulus !== null) ? +(m.modulus * 1000).toFixed(2) : 'N/A',
+    ]);
+  });
+  const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+  wsSummary['!cols'] = [{wch:30},{wch:18},{wch:18},{wch:18},{wch:20}];
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+  // One sheet per selected file
+  for (const file of selectedFiles) {
+    const sheetName = getDisplayName(file.name).slice(0, 31).replace(/[\\/?*[\]:]/g, '_');
+    const wsData = XLSX.utils.json_to_sheet(file.rows);
+    XLSX.utils.book_append_sheet(wb, wsData, sheetName || 'Data');
+  }
+
+  XLSX.writeFile(wb, 'tensile_data.xlsx');
+
+  // Also download chart PNG
+  try {
+    await Plotly.downloadImage('chart-tensile', { format:'png', filename:'tensile_chart', width:560, height:420, scale:3 });
+  } catch(e) {}
 }
 
 /* ═══════════════════════════════════════
@@ -593,8 +767,10 @@ function calcMetrics(file) {
 
   if (pairs.length < 2) return null;
 
-  const maxStrain = Math.max(...pairs.map(p => p.strain));
-  const maxStress = Math.max(...pairs.map(p => p.stress));
+  // Max Stress = peak stress; Max Strain = strain at the peak stress point
+  const maxStressIdx = pairs.reduce((best, p, i) => p.stress > pairs[best].stress ? i : best, 0);
+  const maxStress = pairs[maxStressIdx].stress;
+  const maxStrain = pairs[maxStressIdx].strain;
 
   // Toughness: trapezoidal integration of σ dε (strain % → dimensionless)
   let toughness = 0;
@@ -632,7 +808,7 @@ function renderMetricsTable() {
     const m     = calcMetrics(file);
     const idx   = state.tensileFiles.indexOf(file);
     const color = PALETTE[idx % PALETTE.length];
-    const label = file.name.replace('.csv', '');
+    const label = getDisplayName(file.name);
 
     if (!m) return `
       <div class="metrics-row-strip" style="--rc:${color}">
@@ -664,7 +840,7 @@ function renderMetricsTable() {
 }
 
 /* ═══════════════════════════════════════
-   SELF-HEALING EFFICIENCY OVERLAY
+   SELF-HEALING EFFICIENCY PANEL
 ═══════════════════════════════════════ */
 function toggleHealingPanel() {
   state.healingOpen = !state.healingOpen;
@@ -672,12 +848,30 @@ function toggleHealingPanel() {
   renderHealingCalc(state.tensileFiles.filter(f => state.selectedFiles.has(f.name)));
 }
 
-function renderHealingCalc(files) {
-  const chartEl = document.getElementById('chart-tensile');
-  const existing = document.getElementById('healing-overlay');
-  if (existing) existing.remove();
+function updateHealingBtn(files) {
+  const btn = document.getElementById('mbHealing');
+  const div = document.getElementById('healingDivider');
+  if (!btn) return;
+  const show = state.viewMode === 'overlay' && files && files.length >= 2;
+  btn.style.display = show ? '' : 'none';
+  if (div) div.style.display = show ? '' : 'none';
+  btn.classList.toggle('active', show && state.healingOpen);
+  if (!show) {
+    state.healingOpen = false;
+    const panel = document.getElementById('healing-panel');
+    if (panel) panel.classList.remove('open');
+  }
+}
 
-  if (!files || files.length < 2) return;
+function renderHealingCalc(files) {
+  updateHealingBtn(files);
+  const panel = document.getElementById('healing-panel');
+  if (!panel) return;
+
+  if (!files || files.length < 2 || !state.healingOpen) {
+    panel.classList.remove('open');
+    return;
+  }
 
   const names = files.map(f => f.name);
   if (!state.healingA || !names.includes(state.healingA)) state.healingA = names[0];
@@ -685,10 +879,8 @@ function renderHealingCalc(files) {
     state.healingB = names.find(n => n !== state.healingA) || names[1];
   }
 
-  const fileA = files.find(f => f.name === state.healingA);
-  const fileB = files.find(f => f.name === state.healingB);
-  const mA = fileA ? calcMetrics(fileA) : null;
-  const mB = fileB ? calcMetrics(fileB) : null;
+  const mA = calcMetrics(files.find(f => f.name === state.healingA));
+  const mB = calcMetrics(files.find(f => f.name === state.healingB));
 
   let effHTML = '<span class="ho-na">—</span>';
   if (mA && mB && mA.toughness > 0 && mB.toughness > 0) {
@@ -703,78 +895,43 @@ function renderHealingCalc(files) {
     return `
       <div class="ho-drop ${open ? 'open' : ''}" id="ho-drop-${which}" onclick="event.stopPropagation()">
         <div class="ho-drop-trigger" onclick="toggleHealingDrop('${which}')">
-          <span class="ho-drop-val">${current.replace('.csv','')}</span>
+          <span class="ho-drop-val">${getDisplayName(current)}</span>
           ${chevron}
         </div>
         <div class="ho-drop-menu">
           ${names.map(n => `<div class="ho-drop-item ${n === current ? 'sel' : ''}"
-            onclick="setHealingSample('${which}', ${esc(n)})">${n.replace('.csv','')}</div>`).join('')}
+            onclick="setHealingSample('${which}', ${esc(n)})">${getDisplayName(n)}</div>`).join('')}
         </div>
       </div>`;
   }
 
-  const overlay = document.createElement('div');
-  overlay.id = 'healing-overlay';
-  overlay.style.opacity = '0';   // hidden until positioned
-
-  if (!state.healingOpen) {
-    overlay.innerHTML = `
-      <button class="ho-toggle-btn" onclick="toggleHealingPanel()">
-        <span class="ho-toggle-icon">%</span>
-        <span class="ho-toggle-text">Healing</span>
-        <svg class="ho-toggle-chevron" width="8" height="8" viewBox="0 0 8 8" fill="none">
-          <path d="M1.5 2.5L4 5L6.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>`;
-  } else {
-    overlay.innerHTML = `
-      <button class="ho-toggle-btn ho-toggle-open" onclick="toggleHealingPanel()">
-        <span class="ho-toggle-icon">%</span>
-        <span class="ho-toggle-text">Healing</span>
-        <svg class="ho-toggle-chevron" width="8" height="8" viewBox="0 0 8 8" fill="none" style="transform:rotate(180deg)">
-          <path d="M1.5 2.5L4 5L6.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+  panel.innerHTML = `
+    <div class="ho-modal-header" id="hoModalHeader">
+      <span class="ho-modal-title">Self-Healing Efficiency</span>
+      <button class="ho-close-btn" onclick="toggleHealingPanel()">
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="11" y2="11"/><line x1="11" y1="1" x2="1" y2="11"/></svg>
       </button>
-      <div class="ho-body">
-        <div class="ho-row">
-          ${mkDrop('A', state.healingA)}
-          <span class="ho-op">÷</span>
-          ${mkDrop('B', state.healingB)}
-        </div>
-        <div class="ho-result">${effHTML}</div>
-      </div>`;
+    </div>
+    <div class="ho-body">
+      <div class="ho-row">
+        ${mkDrop('A', state.healingA)}
+        <span class="ho-op">÷</span>
+        ${mkDrop('B', state.healingB)}
+      </div>
+      <div class="ho-result">${effHTML}</div>
+    </div>`;
+
+  // First-time position
+  if (!panel.dataset.positioned) {
+    panel.style.left = Math.max(20, window.innerWidth - 300) + 'px';
+    panel.style.top  = '180px';
+    panel.dataset.positioned = '1';
+    makeDraggable(panel, document.getElementById('hoModalHeader') || panel);
+  } else {
+    makeDraggable(panel, document.getElementById('hoModalHeader') || panel);
   }
 
-  chartEl.style.position = 'relative';
-  chartEl.appendChild(overlay);
-  positionHealingOverlay();
-}
-
-function positionHealingOverlay() {
-  requestAnimationFrame(() => {
-    const chartEl = document.getElementById('chart-tensile');
-    const overlay = document.getElementById('healing-overlay');
-    if (!chartEl || !overlay) return;
-
-    const legendEl = chartEl.querySelector('g.legend');
-    if (legendEl) {
-      const chartRect  = chartEl.getBoundingClientRect();
-      const legendRect = legendEl.getBoundingClientRect();
-
-      // Snap overlay below legend, right-aligned with it
-      const top   = legendRect.bottom - chartRect.top + 8;
-      const right = chartRect.right   - legendRect.right;
-      overlay.style.top   = `${Math.max(44, top)}px`;
-      overlay.style.right = `${Math.max(8, right)}px`;
-      // Match overlay width to legend width so they align cleanly
-      overlay.style.minWidth = `${Math.max(148, Math.round(legendRect.width))}px`;
-    } else {
-      overlay.style.top   = '48px';
-      overlay.style.right = '10px';
-    }
-
-    overlay.style.opacity = '1';
-  });
+  panel.classList.add('open');
 }
 
 function toggleHealingDrop(which) {

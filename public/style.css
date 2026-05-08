@@ -108,6 +108,15 @@ header h1 {
 }
 .chart-controls h2 { font-size: 0.88rem; font-weight: 600; letter-spacing: -0.02em; }
 
+/* Right cluster: chart-type buttons + divider + custom modebar */
+.chart-ctrl-right {
+  display: flex; align-items: center; gap: 5px;
+}
+
+.ctrl-divider {
+  width: 1px; height: 18px; background: var(--border-2); margin: 0 3px; flex-shrink: 0;
+}
+
 .btn-group { display: flex; gap: 3px; }
 .chart-btn {
   padding: 5px 12px; border: 1px solid var(--border); background: var(--surface);
@@ -117,13 +126,27 @@ header h1 {
 .chart-btn:hover  { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
 .chart-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 
+/* Custom modebar */
+.custom-modebar {
+  display: flex; align-items: center; gap: 2px;
+}
+.mb-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface); cursor: pointer;
+  color: var(--text-3); transition: all 0.15s;
+}
+.mb-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+.mb-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
 .chart-area { min-height: 320px; width: 100%; }
 
 /* ═══════════════════════════════════════
    TENSILE TAB — 3-column layout
 ═══════════════════════════════════════ */
 #tab-tensile.active {
-  grid-template-columns: 200px 1fr 272px;
+  grid-template-columns: 300px 1fr 272px;
   gap: 14px;
 }
 
@@ -170,10 +193,10 @@ header h1 {
 .file-selector-list { display: flex; flex-direction: column; }
 
 .file-toggle-btn {
-  display: flex; align-items: center; gap: 8px; width: 100%;
+  display: flex; align-items: flex-start; gap: 8px; width: 100%;
   padding: 8px 9px; border-radius: 8px; cursor: pointer;
   border: 1px solid transparent; background: transparent; color: var(--text-2);
-  transition: all 0.18s; text-align: left; position: relative;
+  transition: all 0.18s; text-align: left;
 }
 .file-toggle-btn:hover { background: var(--bg); }
 .file-toggle-btn.on {
@@ -184,10 +207,17 @@ header h1 {
 .file-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   background: var(--fc); opacity: 0.3; transition: opacity 0.18s;
+  margin-top: 3px; /* align with first text line */
 }
 .file-toggle-btn.on .file-dot { opacity: 1; }
-.file-btn-info  { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; overflow: hidden; }
-.file-btn-name  { font-size: 0.76rem; font-weight: 600; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -0.01em; }
+/* info grows, name wraps to 2 lines max */
+.file-btn-info  { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.file-btn-name  {
+  font-size: 0.72rem; font-weight: 600; line-height: 1.3;
+  letter-spacing: -0.01em; color: inherit;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word;
+}
 .file-btn-date  { font-size: 0.64rem; color: var(--text-3); }
 .file-btn-tags  { display: flex; gap: 3px; margin-top: 2px; }
 .file-tag-dot   { width: 5px; height: 5px; border-radius: 50%; }
@@ -196,28 +226,16 @@ header h1 {
 
 /* ── Manual file delete button ── */
 .file-del-btn {
-  position: absolute; top: 50%; right: 5px;
-  transform: translateY(-50%);
-  width: 16px; height: 16px; border-radius: 50%;
+  flex-shrink: 0;
+  width: 18px; height: 18px; border-radius: 50%;
   background: none; border: none; cursor: pointer;
-  font-size: 0.58rem; color: var(--text-3);
+  font-size: 0.65rem; color: var(--text-3);
   display: flex; align-items: center; justify-content: center;
-  opacity: 0; transition: opacity 0.15s, background 0.15s, color 0.15s;
-  line-height: 1; padding: 0; flex-shrink: 0;
+  opacity: 0.35;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  line-height: 1; padding: 0; margin-left: 4px; align-self: center;
 }
-.file-toggle-btn:hover .file-del-btn { opacity: 1; }
-.file-del-btn:hover { background: #fee2e2 !important; color: #ef4444 !important; }
-
-.file-delete-btn {
-  margin-left: auto; flex-shrink: 0;
-  background: none; border: none; cursor: pointer;
-  font-size: 0.85rem; line-height: 1;
-  color: var(--text-3); opacity: 0;
-  padding: 2px 4px; border-radius: 4px;
-  transition: opacity 0.15s, color 0.15s, background 0.15s;
-}
-.file-toggle-btn:hover .file-delete-btn { opacity: 1; }
-.file-delete-btn:hover { color: #c0392b; background: #fdecea; opacity: 1; }
+.file-del-btn:hover { opacity: 1; background: #fee2e2; color: #ef4444; }
 
 /* ═══════════════════════════════════════
    DEDICATED TAG PANEL
@@ -283,8 +301,27 @@ header h1 {
 }
 .tag-assign-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
-/* ── New tag: color swatches ── */
-.tag-swatches { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 9px; }
+/* ── New tag: palette button + popover ── */
+.tag-palette-wrap { position: relative; flex-shrink: 0; }
+.tag-palette-btn {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--sc); padding: 0; cursor: pointer;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1.5px var(--sc), var(--shadow);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+.tag-palette-btn:hover { transform: scale(1.12); }
+.tag-palette-pop {
+  position: absolute; bottom: calc(100% + 6px); left: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow-md);
+  padding: 9px; display: none; z-index: 100;
+  width: 190px;
+}
+.tag-palette-pop.open { display: flex; flex-wrap: wrap; gap: 7px; }
+
+.tag-swatches { display: flex; flex-wrap: wrap; gap: 7px; }
 .tag-swatch {
   width: 20px; height: 20px; border-radius: 50%;
   background: var(--sc); border: 2.5px solid transparent;
@@ -297,7 +334,7 @@ header h1 {
 }
 
 /* ── New tag: name input row ── */
-.tag-add-row { display: flex; gap: 5px; align-items: center; }
+.tag-add-row { display: flex; gap: 6px; align-items: center; }
 .tag-input {
   flex: 1; padding: 6px 9px; font-size: 0.73rem;
   border: 1px solid var(--border); border-radius: 7px;
@@ -328,7 +365,16 @@ header h1 {
 .t-right > .tl-label { margin-bottom: 2px; }
 
 /* ── Tensile chart ── */
-.tensile-chart { min-height: unset; height: 360px; position: relative; }
+.tensile-chart {
+  position: relative;
+  width: 100%;
+  max-width: 560px;      /* 4:3 at 420px → cap width, then centre */
+  aspect-ratio: 4 / 3;
+  height: auto;
+  min-height: 240px;
+  max-height: 420px;
+  margin: 0 auto;        /* centre in the middle column */
+}
 
 /* ── Sample info card ── */
 .sample-card {
@@ -409,50 +455,42 @@ header h1 {
 .mr-val { font-size: 0.75rem; font-variant-numeric: tabular-nums; color: var(--text-1); }
 .mr-val em { font-style: normal; font-size: 0.62rem; color: var(--text-3); margin-left: 1px; }
 
-/* ─── Self-Healing Efficiency overlay (inside chart, below legend) ─── */
-/* collapsed state is default */
-#healing-overlay {
-  position: absolute;
-  /* top / right / min-width set dynamically by positionHealingOverlay() */
-  min-width: 90px;
-  background: rgba(255,255,255,0.93);
+/* ─── Self-Healing Efficiency panel (floating draggable modal) ─── */
+.chart-controls { position: relative; }
+
+#healing-panel {
+  display: none;
+  position: fixed;
+  z-index: 200;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 20px;   /* pill when collapsed */
-  padding: 0;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  box-shadow: 0 1px 6px rgba(0,0,0,0.07);
-  z-index: 10;
-  transition: opacity 0.15s ease, border-radius 0.18s ease;
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.13), 0 2px 8px rgba(0,0,0,0.07);
+  min-width: 240px;
   overflow: visible;
 }
+#healing-panel.open { display: block; }
 
-/* expanded: square corners */
-#healing-overlay:has(.ho-body) {
-  border-radius: var(--radius-sm);
-  min-width: 148px;
+.ho-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface-2);
+  user-select: none;
 }
-
-.ho-toggle-btn {
-  display: flex; align-items: center; gap: 5px;
-  width: 100%; padding: 5px 10px;
-  background: none; border: none; cursor: pointer;
-  font-size: 0.68rem; font-weight: 600; color: var(--text-2);
-  font-family: inherit; letter-spacing: 0.02em;
-  border-radius: 20px;
-  transition: color 0.15s;
+.ho-modal-title {
+  font-size: 0.68rem; font-weight: 700; color: var(--text-2);
+  text-transform: uppercase; letter-spacing: 0.08em;
 }
-.ho-toggle-btn:hover { color: var(--accent); }
-.ho-toggle-open { border-bottom: 1px solid var(--border); border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
-
-.ho-toggle-icon { font-size: 0.72rem; color: var(--accent); }
-.ho-toggle-text { flex: 1; text-align: left; }
-.ho-toggle-chevron { color: var(--text-3); flex-shrink: 0; }
-
-.ho-label {
-  font-size: 0.6rem; font-weight: 600; letter-spacing: 0.07em;
-  text-transform: uppercase; color: var(--text-3); margin-bottom: 7px;
+.ho-close-btn {
+  width: 20px; height: 20px; border: none; background: none;
+  cursor: pointer; color: var(--text-3);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px; transition: all 0.12s; padding: 0;
 }
+.ho-close-btn:hover { background: var(--bg); color: var(--text-1); }
 
 .ho-body { padding: 8px 10px 10px; }
 
@@ -532,6 +570,27 @@ header h1 {
 .empty-panel p  { font-size: 0.8rem; line-height: 1.7; }
 .empty-icon { font-size: 2.2rem; }
 .hint { color: var(--text-3); font-size: 0.72rem; }
+
+.file-rename-input {
+  flex: 1; font-size: 0.72rem; font-weight: 600;
+  border: none; border-bottom: 1.5px solid var(--accent);
+  background: transparent; color: var(--text-1);
+  outline: none; padding: 0; width: 100%;
+  font-family: inherit; line-height: 1.3;
+}
+
+.tag-eyedropper {
+  position: relative; width: 24px; height: 24px;
+  cursor: pointer; flex-shrink: 0; display: flex;
+  align-items: center; justify-content: center;
+  border-radius: 50%; border: 1.5px solid var(--border-2);
+  background: var(--bg); transition: all 0.15s; color: var(--text-2);
+}
+.tag-eyedropper:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+.tag-eyedropper input[type=color] {
+  position: absolute; opacity: 0; width: 100%; height: 100%;
+  cursor: pointer; top: 0; left: 0; padding: 0; border: none;
+}
 
 /* ── Responsive ── */
 @media (max-width: 960px) {
