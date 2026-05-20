@@ -153,12 +153,49 @@ async function init() {
 }
 
 /* ═══════════════════════════════════════
+   SESSION CACHE  (sessionStorage)
+═══════════════════════════════════════ */
+const SESSION_KEY = 'lab-tensile-cache';
+
+function getSessionCache() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const { files, ts } = JSON.parse(raw);
+    // expire after 25 min (Notion signed URLs ~1 hr)
+    if (Date.now() - ts > 25 * 60 * 1000) { sessionStorage.removeItem(SESSION_KEY); return null; }
+    return files;
+  } catch { return null; }
+}
+
+function setSessionCache(files) {
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ files, ts: Date.now() })); }
+  catch { /* quota exceeded – ignore */ }
+}
+
+function clearSessionCache() {
+  sessionStorage.removeItem(SESSION_KEY);
+}
+
+/* ═══════════════════════════════════════
    API CALLS
 ═══════════════════════════════════════ */
 async function checkStatus() {
   const badge = document.getElementById('statusBadge');
   try {
+    // Try session cache first (skip API call if data already loaded)
+    const cached = getSessionCache();
+    if (cached && cached.length > 0) {
+      badge.textContent = '✅ Notion 已連線 (快取)';
+      badge.className = 'badge badge-green';
+      state.tensileFiles = cached;
+      initSampleParams();
+      renderTensileChart();
+      return;
+    }
+
     const r = await fetch('/api/status');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
     if (d.notionConnected) {
       badge.textContent = '✅ Notion 已連線';
@@ -167,28 +204,37 @@ async function checkStatus() {
     } else {
       badge.textContent = '⚠️ Notion 未連線';
       badge.className = 'badge badge-yellow';
-      showTensileEmpty();
+      showTensileEmpty('NOTION_TOKEN 未設定或無效，請至 Netlify 環境變數確認');
     }
-  } catch {
+  } catch (e) {
     badge.textContent = '❌ 伺服器錯誤';
     badge.className = 'badge badge-red';
+    showTensileEmpty(`伺服器連線失敗：${e.message}`);
   }
 }
 
-async function loadTensile() {
+async function loadTensile(forceRefresh = false) {
+  if (forceRefresh) clearSessionCache();
   setTensileLoading();
   try {
     const r = await fetch('/api/tensile');
+    if (!r.ok) {
+      const txt = await r.text().catch(() => '');
+      throw new Error(`HTTP ${r.status}${txt ? ' — ' + txt.slice(0, 120) : ''}`);
+    }
     const d = await r.json();
     if (d.success && d.files.length > 0) {
       state.tensileFiles = d.files;
+      setSessionCache(d.files);
       initSampleParams();
       renderTensileChart();
+    } else if (d.success && d.files.length === 0) {
+      showTensileEmpty('Notion 頁面中找不到 CSV/XLSX 檔案，請確認已上傳至正確頁面');
     } else {
-      showTensileEmpty(d.error);
+      showTensileEmpty(d.error || '未知錯誤，請開啟 DevTools → Network 查看 /api/tensile 回應');
     }
   } catch (e) {
-    showTensileEmpty(e.message);
+    showTensileEmpty(`取得失敗：${e.message}`);
   }
 }
 
@@ -1032,7 +1078,7 @@ function setupRefresh() {
     const btn = document.getElementById('refreshBtn');
     btn.disabled = true;
     btn.textContent = '更新中…';
-    await loadTensile();
+    await loadTensile(true);   // forceRefresh = true → clear sessionStorage cache
     btn.disabled = false;
     btn.textContent = '⟳ 從 Notion 更新';
   });
