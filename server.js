@@ -72,21 +72,22 @@ async function fetchTensileCSVs() {
   if (!notion) throw new Error('NOTION_TOKEN 未設定');
 
   const blocks = await notion.blocks.children.list({ block_id: TENSILE_PAGE_ID });
-  const results = [];
 
-  for (const block of blocks.results) {
-    if (block.type !== 'file') continue;
+  // Collect all valid file blocks first
+  const fileBlocks = blocks.results.filter(block => {
+    if (block.type !== 'file') return false;
+    const name = block.file?.name || '';
+    const ext = name.toLowerCase().match(/\.(csv|txt|xlsx)$/)?.[1];
+    return !!ext;
+  });
 
+  // Fetch all files in parallel (avoids sequential timeout on Netlify)
+  const results = await Promise.all(fileBlocks.map(async block => {
     const fileObj = block.file;
     const name = fileObj.name || 'unknown.csv';
-    const ext = name.toLowerCase().match(/\.(csv|txt|xlsx)$/)?.[1];
-    if (!ext) continue;
-
-    const url = fileObj.type === 'file'
-      ? fileObj.file?.url
-      : fileObj.external?.url;
-
-    if (!url) continue;
+    const ext = name.toLowerCase().match(/\.(csv|txt|xlsx)$/)[1];
+    const url = fileObj.type === 'file' ? fileObj.file?.url : fileObj.external?.url;
+    if (!url) return null;
 
     try {
       let rawRows;
@@ -98,29 +99,25 @@ async function fetchTensileCSVs() {
       } else {
         const { data: csvText } = await axios.get(url, { timeout: 15000, responseType: 'text' });
         const parseOpts = {
-          columns: true,
-          skip_empty_lines: true,
-          trim: true,
-          relax_column_count: true,
-          bom: true,
+          columns: true, skip_empty_lines: true, trim: true,
+          relax_column_count: true, bom: true,
         };
         rawRows = parse(csvText, { ...parseOpts, delimiter: ext === 'txt' ? '\t' : ',' });
-        // For .txt files, fall back to comma delimiter if tab-split yields only 1 column
         if (ext === 'txt' && rawRows.length > 0 && Object.keys(rawRows[0]).length <= 1) {
           rawRows = parse(csvText, parseOpts);
         }
       }
       const { rows, columns, meta } = cleanMachineCSV(rawRows);
-      results.push({
+      return {
         name, rows, columns,
         meta: { ...meta, createdTime: block.created_time, lastEditedTime: block.last_edited_time },
-      });
+      };
     } catch (e) {
-      results.push({ name, rows: [], columns: [], error: e.message });
+      return { name, rows: [], columns: [], error: e.message };
     }
-  }
+  }));
 
-  return results;
+  return results.filter(Boolean);
 }
 
 // Disable browser caching in dev so CSS/JS changes are always picked up
