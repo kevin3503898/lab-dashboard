@@ -61,7 +61,7 @@ function cleanMachineCSV(rawRows) {
     else if (/extension|displacement|stroke/i.test(v)) colMap['Displacement (mm)'] = key;
   });
 
-  if (!Object.keys(colMap).length) return { rows: rawRows, columns: allKeys, meta: { thickness } };
+  if (!Object.keys(colMap).length) return { rows: rawRows, columns: allKeys, meta: { thickness, width } };
 
   const rows = rawRows.slice(2).map(row => {
     const r = {};
