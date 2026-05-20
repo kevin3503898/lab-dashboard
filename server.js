@@ -68,6 +68,20 @@ function cleanMachineCSV(rawRows) {
   return { rows, columns: Object.keys(colMap), meta: { thickness } };
 }
 
+// Downsample rows to at most MAX_POINTS using stride sampling.
+// Always keeps the first and last point so curve endpoints are preserved.
+const MAX_POINTS = 2000;
+function downsample(rows) {
+  if (rows.length <= MAX_POINTS) return rows;
+  const stride = rows.length / MAX_POINTS;
+  const out = [];
+  for (let i = 0; i < MAX_POINTS - 1; i++) {
+    out.push(rows[Math.round(i * stride)]);
+  }
+  out.push(rows[rows.length - 1]); // always include last point
+  return out;
+}
+
 async function fetchTensileCSVs() {
   if (!notion) throw new Error('NOTION_TOKEN 未設定');
 
@@ -108,9 +122,10 @@ async function fetchTensileCSVs() {
         }
       }
       const { rows, columns, meta } = cleanMachineCSV(rawRows);
+      const sampledRows = downsample(rows);
       return {
-        name, rows, columns,
-        meta: { ...meta, createdTime: block.created_time, lastEditedTime: block.last_edited_time },
+        name, rows: sampledRows, columns,
+        meta: { ...meta, totalPoints: rows.length, createdTime: block.created_time, lastEditedTime: block.last_edited_time },
       };
     } catch (e) {
       return { name, rows: [], columns: [], error: e.message };
@@ -157,7 +172,8 @@ app.post('/api/upload-csv', (req, res) => {
       bom: true,
     });
     const { rows, columns, meta } = cleanMachineCSV(rawRows);
-    const file = { name, rows, columns, meta, source: 'manual' };
+    const sampledRows = downsample(rows);
+    const file = { name, rows: sampledRows, columns, meta: { ...meta, totalPoints: rows.length }, source: 'manual' };
 
     const existing = getCache('tensile') || [];
     const idx = existing.findIndex(f => f.name === name);
