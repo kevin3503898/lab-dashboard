@@ -246,7 +246,7 @@ function initSampleParams() {
     if (!state.sampleParams[f.name]) {
       state.sampleParams[f.name] = {
         thickness: f.meta?.thickness ?? 1.0,  // pre-filled from CSV header
-        width: 5.0,
+        width:     f.meta?.width     ?? 5.0,  // pre-filled from CSV header
         gaugeLength: 20.0,
       };
     }

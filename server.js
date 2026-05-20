@@ -38,13 +38,16 @@ function cleanMachineCSV(rawRows) {
 
   const allKeys = Object.keys(rawRows[0] || {});
 
-  // Extract thickness: the machine puts 'thickness(mm)' as a key and the value as the NEXT key
-  let thickness = null;
-  const tIdx = allKeys.findIndex(k => /thickness/i.test(k));
-  if (tIdx >= 0 && tIdx + 1 < allKeys.length) {
-    const val = parseFloat(allKeys[tIdx + 1]);
-    if (!isNaN(val)) thickness = val;
+  // Extract sample dimensions from machine header row (key = label, next key = value)
+  function extractHeaderNum(regex) {
+    const idx = allKeys.findIndex(k => regex.test(k));
+    if (idx < 0 || idx + 1 >= allKeys.length) return null;
+    const val = parseFloat(allKeys[idx + 1]);
+    return isNaN(val) ? null : val;
   }
+
+  const thickness = extractHeaderNum(/thickness|厚度?/i);
+  const width     = extractHeaderNum(/width|寬度?/i);
 
   const unitRow = rawRows[1];
   const colMap = {}; // standardName → originalKey
@@ -65,7 +68,7 @@ function cleanMachineCSV(rawRows) {
     Object.entries(colMap).forEach(([name, key]) => { r[name] = row[key]; });
     return r;
   });
-  return { rows, columns: Object.keys(colMap), meta: { thickness } };
+  return { rows, columns: Object.keys(colMap), meta: { thickness, width } };
 }
 
 // Downsample rows to at most MAX_POINTS using stride sampling.
