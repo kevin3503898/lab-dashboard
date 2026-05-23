@@ -124,7 +124,11 @@ const BASE_LAYOUT = {
   paper_bgcolor: '#ffffff',
   font: { family: 'Arial, Helvetica, sans-serif', size: 12, color: '#000000' },
   margin: { t: 14, r: 16, b: 55, l: 75 },
-  hoverlabel: { bgcolor: '#1c1917', font: { color: '#f2f0ec' } },
+  hoverlabel: {
+    bgcolor: 'rgba(28,25,23,0.58)',
+    bordercolor: 'rgba(28,25,23,0.2)',
+    font: { size: 11, color: '#f2f0ec' },
+  },
 };
 
 /* ═══════════════════════════════════════
@@ -606,6 +610,96 @@ function toNum(rows, col) {
   return rows.map(r => parseFloat(r[col])).filter(v => !isNaN(v));
 }
 
+function getTraceBounds(traces) {
+  const xs = [], ys = [];
+  traces.forEach(trace => {
+    trace.x.forEach((x, i) => {
+      const y = trace.y[i];
+      if (isFinite(x) && isFinite(y)) {
+        xs.push(x);
+        ys.push(y);
+      }
+    });
+  });
+  if (!xs.length || !ys.length) return null;
+  return {
+    xMin: Math.min(...xs),
+    xMax: Math.max(...xs),
+    yMin: Math.min(...ys),
+    yMax: Math.max(...ys),
+  };
+}
+
+function getAutoLegendLayout(traces) {
+  if (traces.length <= 1) return { legend: {}, axisRanges: {} };
+
+  const bounds = getTraceBounds(traces);
+  if (!bounds) return { legend: {}, axisRanges: {} };
+
+  const xSpan = bounds.xMax - bounds.xMin || Math.max(Math.abs(bounds.xMax), 1);
+  const ySpan = bounds.yMax - bounds.yMin || Math.max(Math.abs(bounds.yMax), 1);
+  const longestLabel = Math.max(...traces.map(t => String(t.name || '').length));
+  const fontSize = traces.length >= 5 || longestLabel > 24 ? 14 : traces.length >= 3 ? 16 : 18;
+  const legendWidthFrac = Math.min(0.48, Math.max(0.24, (longestLabel * fontSize * 0.55 + 32) / 420));
+  const legendHeightFrac = Math.min(0.36, Math.max(0.16, traces.length * (fontSize + 8) / 300));
+
+  const candidates = [
+    { key: 'top-left', x: 0.02, y: 0.98, xanchor: 'left', yanchor: 'top', x0: 0, x1: legendWidthFrac, y0: 1 - legendHeightFrac, y1: 1 },
+    { key: 'top-right', x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top', x0: 1 - legendWidthFrac, x1: 1, y0: 1 - legendHeightFrac, y1: 1 },
+    { key: 'bottom-left', x: 0.02, y: 0.02, xanchor: 'left', yanchor: 'bottom', x0: 0, x1: legendWidthFrac, y0: 0, y1: legendHeightFrac },
+    { key: 'bottom-right', x: 0.98, y: 0.02, xanchor: 'right', yanchor: 'bottom', x0: 1 - legendWidthFrac, x1: 1, y0: 0, y1: legendHeightFrac },
+  ];
+
+  const scoreCandidate = candidate => {
+    let score = 0;
+    traces.forEach(trace => {
+      trace.x.forEach((x, i) => {
+        const y = trace.y[i];
+        if (!isFinite(x) || !isFinite(y)) return;
+        const xf = (x - bounds.xMin) / xSpan;
+        const yf = (y - bounds.yMin) / ySpan;
+        if (xf >= candidate.x0 && xf <= candidate.x1 && yf >= candidate.y0 && yf <= candidate.y1) score++;
+      });
+    });
+    return score;
+  };
+
+  const best = candidates
+    .map(candidate => ({ ...candidate, score: scoreCandidate(candidate) }))
+    .sort((a, b) => a.score - b.score)[0];
+
+  const density = best.score / traces.reduce((sum, trace) => sum + trace.x.length, 0);
+  const needsBreathingRoom = best.score > 0 && density > 0.01;
+  const padX = needsBreathingRoom ? xSpan * Math.min(0.22, legendWidthFrac * 0.45) : 0;
+  const padY = needsBreathingRoom ? ySpan * Math.min(0.24, legendHeightFrac * 0.7) : 0;
+  const axisRanges = {};
+
+  if (padX) {
+    if (best.key.includes('left')) axisRanges.xaxis = [bounds.xMin - padX, bounds.xMax];
+    else axisRanges.xaxis = [bounds.xMin, bounds.xMax + padX];
+  }
+  if (padY) {
+    if (best.key.includes('top')) axisRanges.yaxis = [bounds.yMin, bounds.yMax + padY];
+    else axisRanges.yaxis = [bounds.yMin - padY, bounds.yMax];
+  }
+
+  return {
+    legend: {
+      orientation: 'v',
+      x: best.x,
+      y: best.y,
+      xanchor: best.xanchor,
+      yanchor: best.yanchor,
+      font: { size: needsBreathingRoom ? Math.max(12, fontSize - 2) : fontSize, family: 'Arial, Helvetica, sans-serif', color: '#000000' },
+      bgcolor: 'rgba(255,255,255,0)',
+      borderwidth: 0,
+      itemclick: false,
+      itemdoubleclick: false,
+    },
+    axisRanges,
+  };
+}
+
 async function renderTensileChart() {
   const el = document.getElementById('chart-tensile');
   if (!state.tensileFiles.length) return;
@@ -614,7 +708,6 @@ async function renderTensileChart() {
   const isOverlay = state.selectedFiles.size > 1;
   const traces = [];
   let xTitle = '', yTitle = '';
-  const infoRows = [];
 
   // Only render selected files; keep original index for consistent colours
   state.tensileFiles.forEach((file, idx) => {
@@ -674,58 +767,28 @@ async function renderTensileChart() {
       hovertemplate: `<b>${label}</b><br>${xTitle}: %{x:.3f}<br>${yTitle}: %{y:.4f}<extra></extra>`,
     });
 
-    const maxY = Math.max(...pts.map(pt => pt.y));
-    const maxX = Math.max(...pts.map(pt => pt.x));
     const m    = calcMetrics(file);
-    infoRows.push({ label, maxX, maxY, pts: pts.length, p, area, idx, m });
   });
-
-  // Render info panel
-  document.getElementById('tensile-info').innerHTML = infoRows.map(r => `
-    <div class="sample-card">
-      <div class="sample-card-head">
-        <span class="sample-card-dot" style="background:${PALETTE[r.idx % PALETTE.length]}"></span>
-        <span class="sample-card-name">${r.label}</span>
-      </div>
-      <div class="sample-card-body">
-        <div class="sc-section">Dimensions</div>
-        <div class="sc-row"><span class="sc-key">Thickness</span><span class="sc-val">${r.p.thickness} mm</span></div>
-        <div class="sc-row"><span class="sc-key">Width</span><span class="sc-val">${r.p.width} mm</span></div>
-        <div class="sc-row"><span class="sc-key">Gauge Length</span><span class="sc-val">${r.p.gaugeLength} mm</span></div>
-        <div class="sc-row"><span class="sc-key">Cross-section</span><span class="sc-val">${r.area.toFixed(2)} mm²</span></div>
-        ${r.m ? `
-        <div class="sc-section">Results</div>
-        <div class="sc-row"><span class="sc-key">Max Strain</span><span class="sc-val-emph">${r.m.maxStrain.toFixed(1)}<em>%</em></span></div>
-        <div class="sc-row"><span class="sc-key">Max Stress</span><span class="sc-val-emph">${r.m.maxStress.toFixed(4)}<em>MPa</em></span></div>
-        <div class="sc-row"><span class="sc-key">Toughness</span><span class="sc-val-emph">${(r.m.toughness*1000).toFixed(2)}<em>kJ/m³</em></span></div>
-        <div class="sc-row"><span class="sc-key">Modulus</span><span class="sc-val-emph">${r.m.modulus !== null ? (r.m.modulus*1000).toFixed(1) : '—'}${r.m.modulus !== null ? '<em>kPa</em>' : ''}</span></div>
-        ` : ''}
-        <div class="sc-row sc-muted"><span class="sc-key">Data pts</span><span class="sc-val">${r.pts}</span></div>
-      </div>
-    </div>
-  `).join('') || '<p class="hint">Cannot parse CSV columns</p>';
 
   if (!traces.length) {
     el.innerHTML = `<div class="empty-state"><p>無法解析 CSV 欄位，請確認格式</p></div>`;
     return;
   }
 
-  // Legend inside the plot — top-left corner, semi-transparent bg
-  const legendConfig = isOverlay
-    ? { orientation: 'v', x: 0.02, y: 0.98, xanchor: 'left', yanchor: 'top',
-        font: { size: 20, family: 'Arial, Helvetica, sans-serif', color: '#000000' },
-        bgcolor: 'rgba(255,255,255,0.82)', borderwidth: 0 }
-    : {};
+  const autoLegend = isOverlay ? getAutoLegendLayout(traces) : { legend: {}, axisRanges: {} };
+  const xAxisRange = autoLegend.axisRanges.xaxis;
+  const yAxisRange = autoLegend.axisRanges.yaxis;
 
   const layout = {
     ...BASE_LAYOUT,
-    xaxis: { ...PUB_AXIS, title: { text: xTitle, font: { size: 22, color: '#000000' }, standoff: 10 } },
-    yaxis: { ...PUB_AXIS, title: { text: yTitle, font: { size: 22, color: '#000000' }, standoff: 10 } },
+    xaxis: { ...PUB_AXIS, title: { text: xTitle, font: { size: 22, color: '#000000' }, standoff: 10 }, ...(xAxisRange ? { range: xAxisRange } : {}) },
+    yaxis: { ...PUB_AXIS, title: { text: yTitle, font: { size: 22, color: '#000000' }, standoff: 10 }, ...(yAxisRange ? { range: yAxisRange } : {}) },
     hovermode: isOverlay ? 'x unified' : 'closest',
-    legend: legendConfig,
+    legend: autoLegend.legend,
     showlegend: isOverlay,
   };
 
+  el.innerHTML = '';
   await Plotly.newPlot('chart-tensile', traces, layout, PLOTLY_CONFIG);
   renderMetricsTable();
   renderHealingCalc(state.tensileFiles.filter(f => state.selectedFiles.has(f.name)));
@@ -855,16 +918,21 @@ function renderMetricsTable() {
     const idx   = state.tensileFiles.indexOf(file);
     const color = PALETTE[idx % PALETTE.length];
     const label = getDisplayName(file.name);
+    const p     = state.sampleParams[file.name] || { thickness: 1, width: 5 };
 
     if (!m) return `
       <div class="metrics-row-strip" style="--rc:${color}">
         <div class="mr-sample"><span class="lbl">${label}</span></div>
-        <div class="mr-val" style="grid-column:2/-1;color:var(--text-3)">N/A</div>
+        <div class="mr-val">${p.thickness}<em>mm</em></div>
+        <div class="mr-val">${p.width}<em>mm</em></div>
+        <div class="mr-val" style="grid-column:4/-1;color:var(--text-3)">N/A</div>
       </div>`;
 
     return `
       <div class="metrics-row-strip" style="--rc:${color}">
         <div class="mr-sample"><span class="lbl">${label}</span></div>
+        <div class="mr-val">${p.thickness}<em>mm</em></div>
+        <div class="mr-val">${p.width}<em>mm</em></div>
         <div class="mr-val">${m.maxStrain.toFixed(1)}<em>%</em></div>
         <div class="mr-val">${m.maxStress.toFixed(4)}<em>MPa</em></div>
         <div class="mr-val">${(m.toughness * 1000).toFixed(2)}<em>kJ/m³</em></div>
@@ -876,6 +944,8 @@ function renderMetricsTable() {
     <div class="metrics-strip">
       <div class="metrics-head">
         <div class="mh">Sample</div>
+        <div class="mh">Thickness</div>
+        <div class="mh">Width</div>
         <div class="mh">Max Strain</div>
         <div class="mh">Max Stress</div>
         <div class="mh">Toughness</div>
@@ -891,14 +961,14 @@ function renderMetricsTable() {
 function toggleHealingPanel() {
   state.healingOpen = !state.healingOpen;
   state.healingDropOpen = null;
-  renderHealingCalc(state.tensileFiles.filter(f => state.selectedFiles.has(f.name)));
+  renderHealingCalc();
 }
 
-function updateHealingBtn(files) {
+function updateHealingBtn() {
   const btn = document.getElementById('mbHealing');
   const div = document.getElementById('healingDivider');
   if (!btn) return;
-  const show = state.viewMode === 'overlay' && files && files.length >= 2;
+  const show = state.viewMode === 'overlay' && state.selectedFiles.size >= 2;
   btn.style.display = show ? '' : 'none';
   if (div) div.style.display = show ? '' : 'none';
   btn.classList.toggle('active', show && state.healingOpen);
@@ -909,8 +979,18 @@ function updateHealingBtn(files) {
   }
 }
 
-function renderHealingCalc(files) {
-  updateHealingBtn(files);
+function getSelectedTensileFiles() {
+  return state.tensileFiles.filter(f => state.selectedFiles.has(f.name));
+}
+
+function getFileColor(file) {
+  const idx = state.tensileFiles.indexOf(file);
+  return PALETTE[Math.max(0, idx) % PALETTE.length];
+}
+
+function renderHealingCalc() {
+  const files = getSelectedTensileFiles();
+  updateHealingBtn();
   const panel = document.getElementById('healing-panel');
   if (!panel) return;
 
@@ -925,28 +1005,42 @@ function renderHealingCalc(files) {
     state.healingB = names.find(n => n !== state.healingA) || names[1];
   }
 
-  const mA = calcMetrics(files.find(f => f.name === state.healingA));
-  const mB = calcMetrics(files.find(f => f.name === state.healingB));
+  const fileA = files.find(f => f.name === state.healingA);
+  const fileB = files.find(f => f.name === state.healingB);
+  const mA = calcMetrics(fileA);
+  const mB = calcMetrics(fileB);
 
   let effHTML = '<span class="ho-na">—</span>';
+  let detailHTML = '<div class="ho-detail">Select two samples with valid toughness values.</div>';
   if (mA && mB && mA.toughness > 0 && mB.toughness > 0) {
-    const eff = (Math.min(mA.toughness, mB.toughness) / Math.max(mA.toughness, mB.toughness)) * 100;
+    const eff = (mA.toughness / mB.toughness) * 100;
     effHTML = `<span class="ho-val">${eff.toFixed(1)}<em>%</em></span>`;
+    detailHTML = `
+      <div class="ho-detail">
+        <span><i style="--hc:${getFileColor(fileA)}"></i>${(mA.toughness * 1000).toFixed(2)} kJ/m³</span>
+        <span class="ho-detail-op">÷</span>
+        <span><i style="--hc:${getFileColor(fileB)}"></i>${(mB.toughness * 1000).toFixed(2)} kJ/m³</span>
+      </div>`;
   }
 
   const chevron = `<svg class="ho-chevron" width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 2.5L4 5L6.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
   function mkDrop(which, current) {
     const open = state.healingDropOpen === which;
+    const currentFile = files.find(f => f.name === current);
     return `
       <div class="ho-drop ${open ? 'open' : ''}" id="ho-drop-${which}" onclick="event.stopPropagation()">
         <div class="ho-drop-trigger" onclick="toggleHealingDrop('${which}')">
+          <span class="ho-color-dot" style="--hc:${getFileColor(currentFile)}"></span>
           <span class="ho-drop-val">${getDisplayName(current)}</span>
           ${chevron}
         </div>
         <div class="ho-drop-menu">
-          ${names.map(n => `<div class="ho-drop-item ${n === current ? 'sel' : ''}"
-            onclick="setHealingSample('${which}', ${esc(n)})">${getDisplayName(n)}</div>`).join('')}
+          ${files.map(f => `<div class="ho-drop-item ${f.name === current ? 'sel' : ''}"
+            onclick="setHealingSample('${which}', ${esc(f.name)})">
+              <span class="ho-color-dot" style="--hc:${getFileColor(f)}"></span>
+              <span>${getDisplayName(f.name)}</span>
+            </div>`).join('')}
         </div>
       </div>`;
   }
@@ -959,12 +1053,13 @@ function renderHealingCalc(files) {
       </button>
     </div>
     <div class="ho-body">
+      <div class="ho-help">Healing = selected A toughness ÷ selected B toughness</div>
       <div class="ho-row">
         ${mkDrop('A', state.healingA)}
         <span class="ho-op">÷</span>
         ${mkDrop('B', state.healingB)}
       </div>
-      <div class="ho-result">${effHTML}</div>
+      <div class="ho-result">${effHTML}${detailHTML}</div>
     </div>`;
 
   // First-time position
@@ -990,10 +1085,15 @@ function toggleHealingDrop(which) {
 }
 
 function setHealingSample(which, name) {
-  if (which === 'A') state.healingA = name;
-  else state.healingB = name;
+  if (which === 'A') {
+    state.healingA = name;
+    if (state.healingB === name) state.healingB = getSelectedTensileFiles().find(f => f.name !== name)?.name || state.healingB;
+  } else {
+    state.healingB = name;
+    if (state.healingA === name) state.healingA = getSelectedTensileFiles().find(f => f.name !== name)?.name || state.healingA;
+  }
   state.healingDropOpen = null;
-  renderHealingCalc(state.tensileFiles.filter(f => state.selectedFiles.has(f.name)));
+  renderHealingCalc();
 }
 
 function setTensileLoading() {

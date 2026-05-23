@@ -4,6 +4,7 @@ const { Client } = require('@notionhq/client');
 const axios = require('axios');
 const { parse } = require('csv-parse/sync');
 const XLSX = require('xlsx');
+const iconv = require('iconv-lite');
 const path = require('path');
 
 const app = express();
@@ -31,23 +32,110 @@ function setCache(key, data) {
   cache.set(key, { data, time: Date.now() });
 }
 
+function makeUniqueHeaders(headerCells = []) {
+  const seen = new Map();
+  return headerCells.map((cell, idx) => {
+    const base = String(cell ?? '').trim() || `__EMPTY_${idx}`;
+    const count = seen.get(base) || 0;
+    seen.set(base, count + 1);
+    return count === 0 ? base : `${base}_${count}`;
+  });
+}
+
+function rowsFromMatrix(matrix = []) {
+  const headerCells = matrix[0] || [];
+  const headers = makeUniqueHeaders(headerCells);
+  const rows = matrix.slice(1).map(row => {
+    const obj = {};
+    headers.forEach((header, idx) => {
+      obj[header] = row[idx] ?? '';
+    });
+    return obj;
+  });
+  return { rows, headerCells };
+}
+
+function parseDelimitedTable(text, delimiter) {
+  const matrix = parse(text, {
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+    bom: true,
+    delimiter,
+  });
+  return rowsFromMatrix(matrix);
+}
+
+function decodeTextBuffer(buffer) {
+  const candidates = ['utf8', 'big5', 'cp950'];
+  return candidates
+    .map(encoding => {
+      const text = iconv.decode(buffer, encoding);
+      return {
+        text,
+        replacementChars: (text.match(/\uFFFD/g) || []).length,
+      };
+    })
+    .sort((a, b) => a.replacementChars - b.replacementChars)[0].text;
+}
+
 // Detect Shimadzu/machine CSV format: real column names are in row[1], skip rows 0-1
-// Also extracts sample metadata (thickness) from the machine header row
-function cleanMachineCSV(rawRows) {
+// Also extracts sample metadata from the machine header row
+function cleanMachineCSV(rawRows, headerCells = null) {
   if (rawRows.length < 3) return { rows: rawRows, columns: Object.keys(rawRows[0] || {}), meta: {} };
 
   const allKeys = Object.keys(rawRows[0] || {});
+  const orderedHeaderCells = headerCells?.length ? headerCells : allKeys;
 
-  // Extract sample dimensions from machine header row (key = label, next key = value)
-  function extractHeaderNum(regex) {
-    const idx = allKeys.findIndex(k => regex.test(k));
-    if (idx < 0 || idx + 1 >= allKeys.length) return null;
-    const val = parseFloat(allKeys[idx + 1]);
-    return isNaN(val) ? null : val;
+  // Extract sample dimensions from machine header row. Shimadzu exports vary:
+  // label/value may appear as adjacent column headers, row values, or one text cell.
+  function extractHeaderNum(labelRegex) {
+    const entries = orderedHeaderCells.map((cell, idx) => {
+      const key = allKeys[idx] ?? String(cell ?? '');
+      return {
+        key: String(cell ?? ''),
+        value: rawRows[0]?.[key],
+      };
+    });
+
+    const parseNum = value => {
+      if (value === null || value === undefined) return null;
+      const match = String(value)
+        .normalize('NFKC')
+        .replace(/,/g, '')
+        .match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?/);
+      if (!match) return null;
+      const num = Number(match[0]);
+      return Number.isFinite(num) ? num : null;
+    };
+
+    const hasLabel = value => labelRegex.test(String(value || '').normalize('NFKC'));
+
+    for (let i = 0; i < entries.length; i++) {
+      const current = entries[i];
+      if (!hasLabel(current.key) && !hasLabel(current.value)) continue;
+
+      const sameCellValue = parseNum(current.value);
+      if (sameCellValue !== null) return sameCellValue;
+
+      const sameCellKey = parseNum(current.key);
+      if (sameCellKey !== null) return sameCellKey;
+
+      const next = entries[i + 1];
+      if (!next) return null;
+
+      const nextKey = parseNum(next.key);
+      if (nextKey !== null) return nextKey;
+
+      const nextValue = parseNum(next.value);
+      if (nextValue !== null) return nextValue;
+    }
+
+    return null;
   }
 
-  const thickness = extractHeaderNum(/thickness|厚度?/i);
-  const width     = extractHeaderNum(/width|寬度?/i);
+  const thickness = extractHeaderNum(/thickness|厚度?|厚さ/i);
+  const width     = extractHeaderNum(/width|specimen\s*width|sample\s*width|寬度?|宽度?|幅/i);
 
   const unitRow = rawRows[1];
   const colMap = {}; // standardName → originalKey
@@ -108,23 +196,22 @@ async function fetchTensileCSVs() {
 
     try {
       let rawRows;
+      let headerCells;
       if (ext === 'xlsx') {
         const { data } = await axios.get(url, { timeout: 15000, responseType: 'arraybuffer' });
         const wb = XLSX.read(Buffer.from(data), { type: 'buffer' });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        rawRows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+        const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+        ({ rows: rawRows, headerCells } = rowsFromMatrix(matrix));
       } else {
-        const { data: csvText } = await axios.get(url, { timeout: 15000, responseType: 'text' });
-        const parseOpts = {
-          columns: true, skip_empty_lines: true, trim: true,
-          relax_column_count: true, bom: true,
-        };
-        rawRows = parse(csvText, { ...parseOpts, delimiter: ext === 'txt' ? '\t' : ',' });
-        if (ext === 'txt' && rawRows.length > 0 && Object.keys(rawRows[0]).length <= 1) {
-          rawRows = parse(csvText, parseOpts);
+        const { data } = await axios.get(url, { timeout: 15000, responseType: 'arraybuffer' });
+        const csvText = decodeTextBuffer(Buffer.from(data));
+        ({ rows: rawRows, headerCells } = parseDelimitedTable(csvText, ext === 'txt' ? '\t' : ','));
+        if (ext === 'txt' && rawRows.length > 0 && headerCells.length <= 1) {
+          ({ rows: rawRows, headerCells } = parseDelimitedTable(csvText, ','));
         }
       }
-      const { rows, columns, meta } = cleanMachineCSV(rawRows);
+      const { rows, columns, meta } = cleanMachineCSV(rawRows, headerCells);
       const sampledRows = downsample(rows);
       return {
         name, rows: sampledRows, columns,
@@ -167,14 +254,8 @@ app.post('/api/upload-csv', (req, res) => {
   if (!name || !content) return res.status(400).json({ error: 'name and content required' });
 
   try {
-    const rawRows = parse(content, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-      relax_column_count: true,
-      bom: true,
-    });
-    const { rows, columns, meta } = cleanMachineCSV(rawRows);
+    const { rows: rawRows, headerCells } = parseDelimitedTable(content, ',');
+    const { rows, columns, meta } = cleanMachineCSV(rawRows, headerCells);
     const sampledRows = downsample(rows);
     const file = { name, rows: sampledRows, columns, meta: { ...meta, totalPoints: rows.length }, source: 'manual' };
 
