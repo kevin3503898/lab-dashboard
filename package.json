@@ -8,6 +8,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@netlify/blobs": "^10.7.8",
     "@notionhq/client": "^2.2.15",
     "axios": "^1.6.0",
     "csv-parse": "^5.5.2",

@@ -116,19 +116,27 @@ All routes are also exposed via the serverless wrapper at `/.netlify/functions/a
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/status` | Returns `{ notionConnected: bool }` |
-| `GET` | `/api/tensile` | Fetches all CSV/XLSX files from Notion, parses, downsamples, caches in memory |
+| `GET` | `/api/tensile` | Returns cached tensile data when available; fetches/parses Notion files only on miss or refresh |
+| `GET` | `/api/tensile?refresh=1` | Forces a fresh Notion fetch and refreshes server/browser caches |
 | `POST` | `/api/upload-csv` | Manual upload fallback; body: `{ name, content }` (raw CSV text) |
 | `DELETE` | `/api/tensile/:filename` | Removes a file from the in-memory cache |
 | `GET` | `/api/formulations` | Returns hardcoded formulation records from `data/formulations.js` |
 
-### In-memory cache
+### Tensile data cache
 
 ```js
-const cache = new Map();       // lives only for the duration of one function invocation
-const CACHE_TTL = 25 * 60 * 1000;
+const cache = new Map();                         // warm function invocations only
+const MEMORY_CACHE_TTL = 25 * 60 * 1000;
+const PERSISTENT_CACHE_TTL = 6 * 60 * 60 * 1000; // Netlify Blobs
 ```
 
-**Important:** Netlify serverless functions are stateless. The in-memory cache does **not** persist between requests. Each cold start re-fetches from Notion. A `sessionStorage` cache in the browser (25-min TTL, key `lab-tensile-cache`) compensates for this on the client side.
+`/api/tensile` uses three cache layers to reduce Netlify credit usage:
+
+1. Netlify CDN headers for short-lived shared response caching.
+2. In-memory `Map` for warm function invocations.
+3. Netlify Blobs store `lab-dashboard-cache` key `tensile-cache` for persistent 6-hour data caching.
+
+The browser also stores parsed tensile data in `localStorage['lab-tensile-cache-v2']` for 6 hours. The frontend should load this cache first and only call `/api/tensile` when no local cache exists. The refresh button must call `/api/tensile?refresh=1`.
 
 ### Downsampling
 
@@ -163,12 +171,7 @@ const state = {
 | `lab-tensile-tag-colors` | `{ tagName: '#hex' }` — tag colours |
 | `lab-display-names` | `{ fileName: displayName }` — rename overrides |
 | `lab-manual-files` | `[fileName, ...]` — tracks manually-uploaded files |
-
-### sessionStorage key
-
-| Key | Content |
-|---|---|
-| `lab-tensile-cache` | `{ files: [...], ts: timestamp }` — 25-min client-side cache |
+| `lab-tensile-cache-v2` | `{ files: [...], ts: timestamp }` — 6-hour client-side tensile cache |
 
 ### Chart rendering
 

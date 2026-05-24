@@ -6,6 +6,7 @@ const { parse } = require('csv-parse/sync');
 const XLSX = require('xlsx');
 const iconv = require('iconv-lite');
 const path = require('path');
+const { getStore } = require('@netlify/blobs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,17 +20,68 @@ if (process.env.NOTION_TOKEN) {
   notion = new Client({ auth: process.env.NOTION_TOKEN });
 }
 
-// Simple in-memory cache
+// Multi-layer cache. Netlify Functions are stateless, so memory only helps warm invocations.
 const cache = new Map();
-const CACHE_TTL = 25 * 60 * 1000; // 25 min (Notion signed URLs expire in ~1 hr)
+const MEMORY_CACHE_TTL = 25 * 60 * 1000;
+const PERSISTENT_CACHE_TTL = 6 * 60 * 60 * 1000;
+const TENSILE_CACHE_KEY = 'tensile-cache';
 
-function getCache(key) {
+function getMemoryCache(key) {
   const entry = cache.get(key);
-  if (entry && Date.now() - entry.time < CACHE_TTL) return entry.data;
+  if (entry && Date.now() - entry.time < MEMORY_CACHE_TTL) return entry.data;
   return null;
 }
-function setCache(key, data) {
+
+function setMemoryCache(key, data) {
   cache.set(key, { data, time: Date.now() });
+}
+
+function setTensileCacheHeaders(res, stale = false) {
+  if (stale) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Netlify-CDN-Cache-Control', 'no-store');
+    return;
+  }
+  res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=3600');
+  res.setHeader('Netlify-CDN-Cache-Control', 'public, max-age=300, stale-while-revalidate=21600');
+}
+
+function getBlobStore() {
+  try {
+    return getStore({ name: 'lab-dashboard-cache', consistency: 'strong' });
+  } catch (e) {
+    return null;
+  }
+}
+
+async function getPersistentTensileCache() {
+  const store = getBlobStore();
+  if (!store) return null;
+  try {
+    const cached = await store.get(TENSILE_CACHE_KEY, { type: 'json' });
+    if (!cached?.files || !cached?.ts) return null;
+    const age = Date.now() - cached.ts;
+    return { ...cached, age, fresh: age < PERSISTENT_CACHE_TTL };
+  } catch (e) {
+    console.warn('[cache] Netlify Blobs read failed:', e.message);
+    return null;
+  }
+}
+
+async function setPersistentTensileCache(files) {
+  const store = getBlobStore();
+  if (!store) return false;
+  try {
+    await store.setJSON(TENSILE_CACHE_KEY, {
+      files,
+      ts: Date.now(),
+      ttlMs: PERSISTENT_CACHE_TTL,
+    });
+    return true;
+  } catch (e) {
+    console.warn('[cache] Netlify Blobs write failed:', e.message);
+    return false;
+  }
 }
 
 function makeUniqueHeaders(headerCells = []) {
@@ -236,14 +288,47 @@ app.get('/api/status', (req, res) => {
 });
 
 app.get('/api/tensile', async (req, res) => {
-  const cached = getCache('tensile');
-  if (cached) return res.json({ success: true, files: cached, fromCache: true });
+  const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+  if (forceRefresh) setTensileCacheHeaders(res, true);
+  else setTensileCacheHeaders(res);
+
+  if (!forceRefresh) {
+    const memoryCached = getMemoryCache('tensile');
+    if (memoryCached) {
+      return res.json({ success: true, files: memoryCached, fromCache: true, cacheSource: 'memory' });
+    }
+
+    const persistentCached = await getPersistentTensileCache();
+    if (persistentCached?.fresh) {
+      setMemoryCache('tensile', persistentCached.files);
+      return res.json({
+        success: true,
+        files: persistentCached.files,
+        fromCache: true,
+        cacheSource: 'blob',
+        cacheAgeMs: persistentCached.age,
+      });
+    }
+  }
 
   try {
     const files = await fetchTensileCSVs();
-    setCache('tensile', files);
-    res.json({ success: true, files, fromCache: false });
+    setMemoryCache('tensile', files);
+    const stored = await setPersistentTensileCache(files);
+    res.json({ success: true, files, fromCache: false, cacheSource: stored ? 'notion+blob' : 'notion' });
   } catch (e) {
+    const persistentCached = await getPersistentTensileCache();
+    if (persistentCached?.files?.length) {
+      setMemoryCache('tensile', persistentCached.files);
+      return res.json({
+        success: true,
+        files: persistentCached.files,
+        fromCache: true,
+        cacheSource: 'blob-stale',
+        cacheAgeMs: persistentCached.age,
+        warning: e.message,
+      });
+    }
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -259,11 +344,11 @@ app.post('/api/upload-csv', (req, res) => {
     const sampledRows = downsample(rows);
     const file = { name, rows: sampledRows, columns, meta: { ...meta, totalPoints: rows.length }, source: 'manual' };
 
-    const existing = getCache('tensile') || [];
+    const existing = getMemoryCache('tensile') || [];
     const idx = existing.findIndex(f => f.name === name);
     if (idx >= 0) existing[idx] = file;
     else existing.push(file);
-    setCache('tensile', existing);
+    setMemoryCache('tensile', existing);
 
     res.json({ success: true, rows: rows.length, columns: file.columns });
   } catch (e) {
@@ -273,10 +358,10 @@ app.post('/api/upload-csv', (req, res) => {
 
 app.delete('/api/tensile/:filename', (req, res) => {
   const filename = decodeURIComponent(req.params.filename);
-  const existing = getCache('tensile');
+  const existing = getMemoryCache('tensile');
   if (!existing) return res.json({ success: true });
   const updated = existing.filter(f => f.name !== filename);
-  setCache('tensile', updated);
+  setMemoryCache('tensile', updated);
   res.json({ success: true, removed: existing.length - updated.length });
 });
 

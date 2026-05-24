@@ -426,12 +426,12 @@ header h1 {
 }
 
 .metrics-strip {
-  min-width: 660px;
+  min-width: 600px;
   border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
 }
 .metrics-head {
   display: grid;
-  grid-template-columns: minmax(176px, 1.5fr) 86px 76px 82px 96px 76px;
+  grid-template-columns: minmax(120px, 0.9fr) 82px 72px 78px 92px 72px;
   background: var(--surface-2); border-bottom: 1px solid var(--border);
   padding: 5px 12px;
   column-gap: 6px;
@@ -443,7 +443,7 @@ header h1 {
 }
 .metrics-row-strip {
   display: grid;
-  grid-template-columns: minmax(176px, 1.5fr) 86px 76px 82px 96px 76px;
+  grid-template-columns: minmax(120px, 0.9fr) 82px 72px 78px 92px 72px;
   padding: 6px 12px; align-items: center;
   column-gap: 6px;
   border-left: 3px solid var(--rc);

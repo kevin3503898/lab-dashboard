@@ -153,42 +153,41 @@ async function init() {
       renderTagSection();
     }
   });
-  await checkStatus();
+  await loadCachedOrFetch();
 }
 
 /* ═══════════════════════════════════════
-   SESSION CACHE  (sessionStorage)
+   BROWSER CACHE  (localStorage)
 ═══════════════════════════════════════ */
-const SESSION_KEY = 'lab-tensile-cache';
+const BROWSER_CACHE_KEY = 'lab-tensile-cache-v2';
+const BROWSER_CACHE_TTL = 6 * 60 * 60 * 1000;
 
-function getSessionCache() {
+function getBrowserCache() {
   try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
+    const raw = localStorage.getItem(BROWSER_CACHE_KEY);
     if (!raw) return null;
     const { files, ts } = JSON.parse(raw);
-    // expire after 25 min (Notion signed URLs ~1 hr)
-    if (Date.now() - ts > 25 * 60 * 1000) { sessionStorage.removeItem(SESSION_KEY); return null; }
+    if (Date.now() - ts > BROWSER_CACHE_TTL) { localStorage.removeItem(BROWSER_CACHE_KEY); return null; }
     return files;
   } catch { return null; }
 }
 
-function setSessionCache(files) {
-  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ files, ts: Date.now() })); }
+function setBrowserCache(files) {
+  try { localStorage.setItem(BROWSER_CACHE_KEY, JSON.stringify({ files, ts: Date.now() })); }
   catch { /* quota exceeded – ignore */ }
 }
 
-function clearSessionCache() {
-  sessionStorage.removeItem(SESSION_KEY);
+function clearBrowserCache() {
+  localStorage.removeItem(BROWSER_CACHE_KEY);
 }
 
 /* ═══════════════════════════════════════
    API CALLS
 ═══════════════════════════════════════ */
-async function checkStatus() {
+async function loadCachedOrFetch() {
   const badge = document.getElementById('statusBadge');
   try {
-    // Try session cache first (skip API call if data already loaded)
-    const cached = getSessionCache();
+    const cached = getBrowserCache();
     if (cached && cached.length > 0) {
       badge.textContent = '✅ Notion 已連線 (快取)';
       badge.className = 'badge badge-green';
@@ -198,18 +197,7 @@ async function checkStatus() {
       return;
     }
 
-    const r = await fetch('/api/status');
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const d = await r.json();
-    if (d.notionConnected) {
-      badge.textContent = '✅ Notion 已連線';
-      badge.className = 'badge badge-green';
-      await loadTensile();
-    } else {
-      badge.textContent = '⚠️ Notion 未連線';
-      badge.className = 'badge badge-yellow';
-      showTensileEmpty('NOTION_TOKEN 未設定或無效，請至 Netlify 環境變數確認');
-    }
+    await loadTensile(false);
   } catch (e) {
     badge.textContent = '❌ 伺服器錯誤';
     badge.className = 'badge badge-red';
@@ -218,26 +206,35 @@ async function checkStatus() {
 }
 
 async function loadTensile(forceRefresh = false) {
-  if (forceRefresh) clearSessionCache();
+  if (forceRefresh) clearBrowserCache();
+  const badge = document.getElementById('statusBadge');
   setTensileLoading();
   try {
-    const r = await fetch('/api/tensile');
+    const r = await fetch(forceRefresh ? '/api/tensile?refresh=1' : '/api/tensile');
     if (!r.ok) {
       const txt = await r.text().catch(() => '');
       throw new Error(`HTTP ${r.status}${txt ? ' — ' + txt.slice(0, 120) : ''}`);
     }
     const d = await r.json();
     if (d.success && d.files.length > 0) {
+      badge.textContent = d.fromCache ? '✅ Notion 已連線 (快取)' : '✅ Notion 已連線';
+      badge.className = 'badge badge-green';
       state.tensileFiles = d.files;
-      setSessionCache(d.files);
+      setBrowserCache(d.files);
       initSampleParams();
       renderTensileChart();
     } else if (d.success && d.files.length === 0) {
+      badge.textContent = '⚠️ Notion 無資料';
+      badge.className = 'badge badge-yellow';
       showTensileEmpty('Notion 頁面中找不到 CSV/XLSX 檔案，請確認已上傳至正確頁面');
     } else {
+      badge.textContent = '❌ 伺服器錯誤';
+      badge.className = 'badge badge-red';
       showTensileEmpty(d.error || '未知錯誤，請開啟 DevTools → Network 查看 /api/tensile 回應');
     }
   } catch (e) {
+    badge.textContent = '❌ 伺服器錯誤';
+    badge.className = 'badge badge-red';
     showTensileEmpty(`取得失敗：${e.message}`);
   }
 }
@@ -1190,7 +1187,7 @@ function setupRefresh() {
     const btn = document.getElementById('refreshBtn');
     btn.disabled = true;
     btn.textContent = '更新中…';
-    await loadTensile(true);   // forceRefresh = true → clear sessionStorage cache
+    await loadTensile(true);   // forceRefresh = true → clear browser cache and refresh Notion data
     btn.disabled = false;
     btn.textContent = '⟳ 從 Notion 更新';
   });
