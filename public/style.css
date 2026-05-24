@@ -417,17 +417,24 @@ header h1 {
 /* ═══════════════════════════════════════
    METRICS TABLE — compact strip style
 ═══════════════════════════════════════ */
-#metrics-table { margin-top: 2px; }
+#metrics-table {
+  margin-top: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
 
 .metrics-strip {
+  min-width: 660px;
   border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
 }
 .metrics-head {
   display: grid;
-  grid-template-columns: minmax(160px, 1.8fr) 0.85fr 0.85fr 1fr 1fr 1.05fr 0.95fr;
+  grid-template-columns: minmax(176px, 1.5fr) 86px 76px 82px 96px 76px;
   background: var(--surface-2); border-bottom: 1px solid var(--border);
   padding: 5px 12px;
-  column-gap: 8px;
+  column-gap: 6px;
 }
 .mh {
   font-size: 0.58rem; font-weight: 700; color: var(--text-3);
@@ -436,9 +443,9 @@ header h1 {
 }
 .metrics-row-strip {
   display: grid;
-  grid-template-columns: minmax(160px, 1.8fr) 0.85fr 0.85fr 1fr 1fr 1.05fr 0.95fr;
+  grid-template-columns: minmax(176px, 1.5fr) 86px 76px 82px 96px 76px;
   padding: 6px 12px; align-items: center;
-  column-gap: 8px;
+  column-gap: 6px;
   border-left: 3px solid var(--rc);
   border-bottom: 1px solid var(--bg);
   transition: background 0.14s;

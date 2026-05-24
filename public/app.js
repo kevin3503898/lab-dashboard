@@ -923,16 +923,14 @@ function renderMetricsTable() {
     if (!m) return `
       <div class="metrics-row-strip" style="--rc:${color}">
         <div class="mr-sample"><span class="lbl">${label}</span></div>
-        <div class="mr-val">${p.thickness}<em>mm</em></div>
-        <div class="mr-val">${p.width}<em>mm</em></div>
-        <div class="mr-val" style="grid-column:4/-1;color:var(--text-3)">N/A</div>
+        <div class="mr-val">${p.thickness}*${p.width}</div>
+        <div class="mr-val" style="grid-column:3/-1;color:var(--text-3)">N/A</div>
       </div>`;
 
     return `
       <div class="metrics-row-strip" style="--rc:${color}">
         <div class="mr-sample"><span class="lbl">${label}</span></div>
-        <div class="mr-val">${p.thickness}<em>mm</em></div>
-        <div class="mr-val">${p.width}<em>mm</em></div>
+        <div class="mr-val">${p.thickness}*${p.width}</div>
         <div class="mr-val">${m.maxStrain.toFixed(1)}<em>%</em></div>
         <div class="mr-val">${m.maxStress.toFixed(4)}<em>MPa</em></div>
         <div class="mr-val">${(m.toughness * 1000).toFixed(2)}<em>kJ/m³</em></div>
@@ -944,10 +942,9 @@ function renderMetricsTable() {
     <div class="metrics-strip">
       <div class="metrics-head">
         <div class="mh">Sample</div>
-        <div class="mh">Thickness</div>
-        <div class="mh">Width</div>
-        <div class="mh">Max Strain</div>
-        <div class="mh">Max Stress</div>
+        <div class="mh">Size (T*W)</div>
+        <div class="mh">Strain</div>
+        <div class="mh">Stress</div>
         <div class="mh">Toughness</div>
         <div class="mh">Modulus</div>
       </div>
