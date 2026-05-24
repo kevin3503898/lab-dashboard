@@ -6,7 +6,7 @@
   <title>PVP/β-CD/AzoIL Dashboard</title>
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
   <div class="app">
@@ -78,8 +78,7 @@
           <div class="chart-controls">
             <div class="chart-ctrl-right">
               <div class="btn-group">
-                <button class="chart-btn active" data-chart="stress-strain">Stress–Strain</button>
-                <button class="chart-btn" data-chart="force-disp">Force–Displacement</button>
+                <button class="chart-btn chart-toggle active" id="chartToggleBtn" data-chart="stress-strain" data-tip="Switch chart type">Stress–Strain</button>
               </div>
               <div class="ctrl-divider"></div>
               <div class="custom-modebar" id="customModebar">
@@ -145,6 +144,6 @@
   </div>
 
   <div id="healing-panel" class="healing-panel"></div>
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

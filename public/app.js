@@ -1163,13 +1163,23 @@ function setupTabs() {
 }
 
 function setupChartBtns() {
-  document.querySelectorAll('#tab-tensile .chart-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#tab-tensile .chart-btn')
-        .forEach(b => b.classList.toggle('active', b === btn));
-      state.tensileChart = btn.dataset.chart;
-      renderTensileChart();
-    });
+  const btn = document.getElementById('chartToggleBtn');
+  if (!btn) return;
+
+  const syncChartToggle = () => {
+    btn.dataset.chart = state.tensileChart;
+    btn.textContent = state.tensileChart === 'stress-strain'
+      ? 'Stress–Strain'
+      : 'Force–Displacement';
+  };
+
+  syncChartToggle();
+  btn.addEventListener('click', () => {
+    state.tensileChart = state.tensileChart === 'stress-strain'
+      ? 'force-disp'
+      : 'stress-strain';
+    syncChartToggle();
+    renderTensileChart();
   });
 }
 

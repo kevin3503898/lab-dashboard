@@ -126,6 +126,10 @@ header h1 {
 }
 .chart-btn:hover  { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
 .chart-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.chart-toggle {
+  min-width: 134px;
+  text-align: center;
+}
 
 /* Custom modebar */
 .custom-modebar {
