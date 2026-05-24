@@ -1167,13 +1167,18 @@ function setupChartBtns() {
   if (!btn) return;
 
   const syncChartToggle = () => {
+    const isCompact = window.matchMedia('(max-width: 560px)').matches;
     btn.dataset.chart = state.tensileChart;
     btn.textContent = state.tensileChart === 'stress-strain'
-      ? 'Stress–Strain'
-      : 'Force–Displacement';
+      ? (isCompact ? 'S–S' : 'Stress–Strain')
+      : (isCompact ? 'F–D' : 'Force–Displacement');
+    btn.dataset.tip = state.tensileChart === 'stress-strain'
+      ? 'Switch to Force–Displacement'
+      : 'Switch to Stress–Strain';
   };
 
   syncChartToggle();
+  window.addEventListener('resize', syncChartToggle);
   btn.addEventListener('click', () => {
     state.tensileChart = state.tensileChart === 'stress-strain'
       ? 'force-disp'

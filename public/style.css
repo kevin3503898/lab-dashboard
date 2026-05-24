@@ -110,6 +110,7 @@ header h1 {
 /* Chart-type buttons + custom modebar */
 .chart-ctrl-right {
   display: flex; align-items: center; justify-content: flex-start; gap: 5px;
+  flex-wrap: wrap;
   width: 100%;
   min-width: 0;
 }
@@ -127,13 +128,14 @@ header h1 {
 .chart-btn:hover  { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
 .chart-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .chart-toggle {
-  min-width: 134px;
+  min-width: 112px;
   text-align: center;
 }
 
 /* Custom modebar */
 .custom-modebar {
-  display: flex; align-items: center; gap: 2px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px;
+  min-width: 0;
 }
 .mb-btn {
   position: relative;
@@ -637,4 +639,21 @@ header h1 {
 @media (max-width: 960px) {
   .tab-content.active { grid-template-columns: 1fr; }
   #tab-tensile.active { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .panel { padding: 14px; }
+  .chart-controls { gap: 6px; }
+  .chart-ctrl-right { gap: 4px; }
+  .chart-toggle {
+    min-width: 48px;
+    padding-inline: 8px;
+  }
+  .custom-modebar { gap: 3px; }
+  .mb-btn {
+    width: 27px;
+    height: 27px;
+    border-radius: 7px;
+  }
+  .ctrl-divider { margin: 0 1px; }
 }
