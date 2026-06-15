@@ -93,7 +93,7 @@ function saveDisplayName(fileName, displayName) {
 }
 function getDisplayName(fileName) {
   const names = getDisplayNames();
-  return names[fileName] || fileName.replace(/\.(csv|txt|xlsx)$/i, '');
+  return names[fileName] || fileName.replace(/\.(csv|txt|xlsx|xls)$/i, '');
 }
 
 /* ── Plotly shared config ── */
@@ -159,7 +159,7 @@ async function init() {
 /* ═══════════════════════════════════════
    BROWSER CACHE  (localStorage)
 ═══════════════════════════════════════ */
-const BROWSER_CACHE_KEY = 'lab-tensile-cache-v2';
+const BROWSER_CACHE_KEY = 'lab-tensile-cache-v3';
 const BROWSER_CACHE_TTL = 6 * 60 * 60 * 1000;
 
 function getBrowserCache() {
@@ -181,6 +181,49 @@ function clearBrowserCache() {
   localStorage.removeItem(BROWSER_CACHE_KEY);
 }
 
+function hasThicknessInfo(file) {
+  const thickness = Number(file?.meta?.thickness);
+  return Number.isFinite(thickness) && thickness > 0;
+}
+
+function selectedFilesNeedForceDisplacement() {
+  return state.tensileFiles.some(file =>
+    state.selectedFiles.has(file.name) && !hasThicknessInfo(file)
+  );
+}
+
+function syncChartToggle() {
+  const btn = document.getElementById('chartToggleBtn');
+  if (!btn) return;
+
+  const forceOnly = selectedFilesNeedForceDisplacement();
+  if (forceOnly) state.tensileChart = 'force-disp';
+
+  const isCompact = window.matchMedia('(max-width: 560px)').matches;
+  btn.dataset.chart = state.tensileChart;
+  btn.textContent = state.tensileChart === 'stress-strain'
+    ? (isCompact ? 'S–S' : 'Stress–Strain')
+    : (isCompact ? 'F–D' : 'Force–Displacement');
+  btn.dataset.tip = forceOnly
+    ? 'Missing thickness: Force–Displacement only'
+    : state.tensileChart === 'stress-strain'
+      ? 'Switch to Force–Displacement'
+      : 'Switch to Stress–Strain';
+  btn.disabled = forceOnly;
+}
+
+function syncTensileState(files) {
+  const validNames = new Set(files.map(file => file.name));
+  state.selectedFiles = new Set(
+    [...state.selectedFiles].filter(name => validNames.has(name))
+  );
+  Object.keys(state.sampleParams).forEach(name => {
+    if (!validNames.has(name)) delete state.sampleParams[name];
+  });
+  if (state.healingA && !validNames.has(state.healingA)) state.healingA = null;
+  if (state.healingB && !validNames.has(state.healingB)) state.healingB = null;
+}
+
 /* ═══════════════════════════════════════
    API CALLS
 ═══════════════════════════════════════ */
@@ -192,6 +235,7 @@ async function loadCachedOrFetch() {
       badge.textContent = '✅ Notion 已連線 (快取)';
       badge.className = 'badge badge-green';
       state.tensileFiles = cached;
+      syncTensileState(cached);
       initSampleParams();
       renderTensileChart();
       return;
@@ -220,6 +264,7 @@ async function loadTensile(forceRefresh = false) {
       badge.textContent = d.fromCache ? '✅ Notion 已連線 (快取)' : '✅ Notion 已連線';
       badge.className = 'badge badge-green';
       state.tensileFiles = d.files;
+      syncTensileState(d.files);
       setBrowserCache(d.files);
       initSampleParams();
       renderTensileChart();
@@ -353,6 +398,9 @@ function renderFileSelector() {
     const label = getDisplayName(f.name);
     const on    = state.selectedFiles.has(f.name);
     const color = PALETTE[i % PALETTE.length];
+    const thicknessNote = hasThicknessInfo(f)
+      ? ''
+      : '<span class="file-missing-thickness">無厚度資訊</span>';
 
     const rawDate = f.meta?.lastEditedTime || f.meta?.createdTime;
     let dateStr = '';
@@ -373,11 +421,11 @@ function renderFileSelector() {
     const divider = vi > 0 ? '<div class="selector-divider"></div>' : '';
     return `${divider}
       <button class="file-toggle-btn ${on ? 'on' : ''}" style="--fc:${color}"
-        title="Original: ${f.name}"
+        title="Original: ${f.originalName || f.name}"
         onclick="handleFileBtnClick(event, ${esc(f.name)})">
         <span class="file-dot"></span>
         <div class="file-btn-info">
-          <span class="file-btn-name">${label}</span>
+          <span class="file-btn-name">${label}${thicknessNote}</span>
           ${dateStr ? `<span class="file-btn-date">${dateStr}</span>` : ''}
           ${tagDotsHTML}
         </div>
@@ -421,6 +469,7 @@ function toggleFile(name) {
       state.selectedFiles.add(name);
     }
   }
+  syncChartToggle();
   renderFileSelector();
   renderTensileChart();
   renderTagSection();
@@ -701,6 +750,7 @@ async function renderTensileChart() {
   const el = document.getElementById('chart-tensile');
   if (!state.tensileFiles.length) return;
 
+  syncChartToggle();
   const isStressStrain = state.tensileChart === 'stress-strain';
   const isOverlay = state.selectedFiles.size > 1;
   const traces = [];
@@ -865,10 +915,25 @@ async function exportToXLSX() {
 ═══════════════════════════════════════ */
 function calcMetrics(file) {
   const cols = detectCols(file.rows);
-  if (!cols.strain || !cols.stress) return null;
+  let pairs;
+  if (cols.strain && cols.stress) {
+    pairs = file.rows.map(r => ({
+      strain: parseFloat(r[cols.strain]),
+      stress: parseFloat(r[cols.stress]),
+    }));
+  } else if (cols.displacement && cols.force) {
+    if (!hasThicknessInfo(file)) return null;
+    const p = state.sampleParams[file.name] || { thickness: 1, width: 5, gaugeLength: 20 };
+    const area = p.thickness * p.width;
+    pairs = file.rows.map(r => ({
+      strain: (parseFloat(r[cols.displacement]) / p.gaugeLength) * 100,
+      stress: parseFloat(r[cols.force]) / area,
+    }));
+  } else {
+    return null;
+  }
 
-  const pairs = file.rows
-    .map(r => ({ strain: parseFloat(r[cols.strain]), stress: parseFloat(r[cols.stress]) }))
+  pairs = pairs
     .filter(p => isFinite(p.strain) && isFinite(p.stress) && p.strain >= 0 && p.stress >= 0);
 
   if (pairs.length < 2) return null;
@@ -916,18 +981,19 @@ function renderMetricsTable() {
     const color = PALETTE[idx % PALETTE.length];
     const label = getDisplayName(file.name);
     const p     = state.sampleParams[file.name] || { thickness: 1, width: 5 };
+    const size  = hasThicknessInfo(file) ? `${p.thickness}*${p.width}` : '—';
 
     if (!m) return `
       <div class="metrics-row-strip" style="--rc:${color}">
         <div class="mr-sample"><span class="lbl">${label}</span></div>
-        <div class="mr-val">${p.thickness}*${p.width}</div>
+        <div class="mr-val">${size}</div>
         <div class="mr-val" style="grid-column:3/-1;color:var(--text-3)">N/A</div>
       </div>`;
 
     return `
       <div class="metrics-row-strip" style="--rc:${color}">
         <div class="mr-sample"><span class="lbl">${label}</span></div>
-        <div class="mr-val">${p.thickness}*${p.width}</div>
+        <div class="mr-val">${size}</div>
         <div class="mr-val">${m.maxStrain.toFixed(1)}<em>%</em></div>
         <div class="mr-val">${m.maxStress.toFixed(4)}<em>MPa</em></div>
         <div class="mr-val">${(m.toughness * 1000).toFixed(2)}<em>kJ/m³</em></div>
@@ -1160,20 +1226,10 @@ function setupChartBtns() {
   const btn = document.getElementById('chartToggleBtn');
   if (!btn) return;
 
-  const syncChartToggle = () => {
-    const isCompact = window.matchMedia('(max-width: 560px)').matches;
-    btn.dataset.chart = state.tensileChart;
-    btn.textContent = state.tensileChart === 'stress-strain'
-      ? (isCompact ? 'S–S' : 'Stress–Strain')
-      : (isCompact ? 'F–D' : 'Force–Displacement');
-    btn.dataset.tip = state.tensileChart === 'stress-strain'
-      ? 'Switch to Force–Displacement'
-      : 'Switch to Stress–Strain';
-  };
-
   syncChartToggle();
   window.addEventListener('resize', syncChartToggle);
   btn.addEventListener('click', () => {
+    if (btn.disabled) return;
     state.tensileChart = state.tensileChart === 'stress-strain'
       ? 'force-disp'
       : 'stress-strain';

@@ -24,7 +24,7 @@ if (process.env.NOTION_TOKEN) {
 const cache = new Map();
 const MEMORY_CACHE_TTL = 25 * 60 * 1000;
 const PERSISTENT_CACHE_TTL = 6 * 60 * 60 * 1000;
-const TENSILE_CACHE_KEY = 'tensile-cache';
+const TENSILE_CACHE_KEY = 'tensile-cache-v2';
 
 function getMemoryCache(key) {
   const entry = cache.get(key);
@@ -105,6 +105,27 @@ function rowsFromMatrix(matrix = []) {
     return obj;
   });
   return { rows, headerCells };
+}
+
+function numberDuplicateFileNames(files) {
+  const totals = new Map();
+  files.forEach(file => {
+    const key = file.originalName.toLocaleLowerCase();
+    totals.set(key, (totals.get(key) || 0) + 1);
+  });
+
+  const seen = new Map();
+  return files.map(file => {
+    const key = file.originalName.toLocaleLowerCase();
+    if (totals.get(key) < 2) return { ...file, name: file.originalName };
+
+    const number = (seen.get(key) || 0) + 1;
+    seen.set(key, number);
+    const dot = file.originalName.lastIndexOf('.');
+    const base = dot > 0 ? file.originalName.slice(0, dot) : file.originalName;
+    const ext = dot > 0 ? file.originalName.slice(dot) : '';
+    return { ...file, name: `${base} (${number})${ext}` };
+  });
 }
 
 function parseDelimitedTable(text, delimiter) {
@@ -197,8 +218,10 @@ function cleanMachineCSV(rawRows, headerCells = null) {
     if (/strain/i.test(v))                              colMap['Strain (%)']        = key;
     else if (/stress/i.test(v))                         colMap['Stress (MPa)']      = key;
     else if (/^sec$/i.test(v))                          colMap['Time (sec)']        = key;
-    else if (/force|load/i.test(v))                     colMap['Force (N)']         = key;
-    else if (/extension|displacement|stroke/i.test(v)) colMap['Displacement (mm)'] = key;
+    else if (/^(n|newton)$/i.test(v) || /force|load/i.test(v))
+                                                            colMap['Force (N)']         = key;
+    else if (/^mm$/i.test(v) || /extension|displacement|stroke/i.test(v))
+                                                            colMap['Displacement (mm)'] = key;
   });
 
   if (!Object.keys(colMap).length) return { rows: rawRows, columns: allKeys, meta: { thickness, width } };
@@ -234,22 +257,22 @@ async function fetchTensileCSVs() {
   const fileBlocks = blocks.results.filter(block => {
     if (block.type !== 'file') return false;
     const name = block.file?.name || '';
-    const ext = name.toLowerCase().match(/\.(csv|txt|xlsx)$/)?.[1];
+    const ext = name.toLowerCase().match(/\.(csv|txt|xlsx|xls)$/)?.[1];
     return !!ext;
   });
 
   // Fetch all files in parallel (avoids sequential timeout on Netlify)
   const results = await Promise.all(fileBlocks.map(async block => {
     const fileObj = block.file;
-    const name = fileObj.name || 'unknown.csv';
-    const ext = name.toLowerCase().match(/\.(csv|txt|xlsx)$/)[1];
+    const originalName = fileObj.name || 'unknown.csv';
+    const ext = originalName.toLowerCase().match(/\.(csv|txt|xlsx|xls)$/)[1];
     const url = fileObj.type === 'file' ? fileObj.file?.url : fileObj.external?.url;
     if (!url) return null;
 
     try {
       let rawRows;
       let headerCells;
-      if (ext === 'xlsx') {
+      if (ext === 'xlsx' || ext === 'xls') {
         const { data } = await axios.get(url, { timeout: 15000, responseType: 'arraybuffer' });
         const wb = XLSX.read(Buffer.from(data), { type: 'buffer' });
         const ws = wb.Sheets[wb.SheetNames[0]];
@@ -266,15 +289,26 @@ async function fetchTensileCSVs() {
       const { rows, columns, meta } = cleanMachineCSV(rawRows, headerCells);
       const sampledRows = downsample(rows);
       return {
-        name, rows: sampledRows, columns,
+        id: block.id,
+        name: originalName,
+        originalName,
+        rows: sampledRows,
+        columns,
         meta: { ...meta, totalPoints: rows.length, createdTime: block.created_time, lastEditedTime: block.last_edited_time },
       };
     } catch (e) {
-      return { name, rows: [], columns: [], error: e.message };
+      return {
+        id: block.id,
+        name: originalName,
+        originalName,
+        rows: [],
+        columns: [],
+        error: e.message,
+      };
     }
   }));
 
-  return results.filter(Boolean);
+  return numberDuplicateFileNames(results.filter(Boolean));
 }
 
 // Disable browser caching in dev so CSS/JS changes are always picked up

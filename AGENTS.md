@@ -58,12 +58,13 @@ Without the token, Notion auto-fetch is disabled; manual CSV upload still works.
 
 ### How data is stored
 
-- There is **no Notion database**. Data files (CSV / TXT / XLSX) are attached as **file blocks** directly on a Notion page.
+- There is **no Notion database**. Data files (CSV / TXT / XLSX / XLS) are attached as **file blocks** directly on a Notion page.
 - The Notion page ID for tensile test files is hardcoded in `server.js`:
   ```js
   const TENSILE_PAGE_ID = '2f6f034d3a7480b3ba96c1fb6da3264e';
   ```
-- The API call is `notion.blocks.children.list({ block_id: TENSILE_PAGE_ID })` — it lists all blocks and filters for `block.type === 'file'` with `.csv`, `.txt`, or `.xlsx` extensions.
+- The API call is `notion.blocks.children.list({ block_id: TENSILE_PAGE_ID })` — it lists all blocks and filters for `block.type === 'file'` with `.csv`, `.txt`, `.xlsx`, or `.xls` extensions.
+- Notion block IDs are included in the API response. Exact duplicate filenames are numbered in list order, for example `Azo15 (1).csv` and `Azo15 (2).csv`, so frontend selection keys remain unique.
 
 ### CSV / XLSX file format (Shimadzu tensile machine output)
 
@@ -84,8 +85,8 @@ The machine produces a file where:
 | `Strain (%)` | `/strain/i` |
 | `Stress (MPa)` | `/stress/i` |
 | `Time (sec)` | `/^sec$/i` |
-| `Force (N)` | `/force\|load/i` |
-| `Displacement (mm)` | `/extension\|displacement\|stroke/i` |
+| `Force (N)` | exact unit `N` / `newton`, or `/force\|load/i` |
+| `Displacement (mm)` | exact unit `mm`, or `/extension\|displacement\|stroke/i` |
 
 ### Metadata extraction (`server.js → extractHeaderNum`)
 
@@ -106,6 +107,8 @@ The frontend re-detects columns from the standardised names returned by the serv
 | force | `/force\|load\|newton\|力\|荷重/i` |
 | stress | `/stress\|mpa\|壓力\|應力/i` |
 | strain | `/strain\|%\|應變/i` |
+
+Samples without a positive `meta.thickness` value are marked `無厚度資訊` in the selector. Selecting any such sample forces the chart to Force–Displacement mode and disables the chart-type toggle; stress-derived metrics must remain `N/A` instead of using a fallback thickness.
 
 ---
 
@@ -134,9 +137,9 @@ const PERSISTENT_CACHE_TTL = 6 * 60 * 60 * 1000; // Netlify Blobs
 
 1. Netlify CDN headers for short-lived shared response caching.
 2. In-memory `Map` for warm function invocations.
-3. Netlify Blobs store `lab-dashboard-cache` key `tensile-cache` for persistent 6-hour data caching.
+3. Netlify Blobs store `lab-dashboard-cache` key `tensile-cache-v2` for persistent 6-hour data caching.
 
-The browser also stores parsed tensile data in `localStorage['lab-tensile-cache-v2']` for 6 hours. The frontend should load this cache first and only call `/api/tensile` when no local cache exists. The refresh button must call `/api/tensile?refresh=1`.
+The browser also stores parsed tensile data in `localStorage['lab-tensile-cache-v3']` for 6 hours. The frontend should load this cache first and only call `/api/tensile` when no local cache exists. The refresh button must call `/api/tensile?refresh=1`.
 
 ### Downsampling
 
@@ -171,7 +174,7 @@ const state = {
 | `lab-tensile-tag-colors` | `{ tagName: '#hex' }` — tag colours |
 | `lab-display-names` | `{ fileName: displayName }` — rename overrides |
 | `lab-manual-files` | `[fileName, ...]` — tracks manually-uploaded files |
-| `lab-tensile-cache-v2` | `{ files: [...], ts: timestamp }` — 6-hour client-side tensile cache |
+| `lab-tensile-cache-v3` | `{ files: [...], ts: timestamp }` — 6-hour client-side tensile cache |
 
 ### Chart rendering
 
