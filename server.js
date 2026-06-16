@@ -23,8 +23,7 @@ if (process.env.NOTION_TOKEN) {
 // Multi-layer cache. Netlify Functions are stateless, so memory only helps warm invocations.
 const cache = new Map();
 const MEMORY_CACHE_TTL = 25 * 60 * 1000;
-const PERSISTENT_CACHE_TTL = 6 * 60 * 60 * 1000;
-const TENSILE_CACHE_KEY = 'tensile-cache-v2';
+const TENSILE_CACHE_KEY = 'tensile-cache-v3';
 
 function getMemoryCache(key) {
   const entry = cache.get(key);
@@ -43,7 +42,7 @@ function setTensileCacheHeaders(res, stale = false) {
     return;
   }
   res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=3600');
-  res.setHeader('Netlify-CDN-Cache-Control', 'public, max-age=300, stale-while-revalidate=21600');
+  res.setHeader('Netlify-CDN-Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
 }
 
 function getBlobStore() {
@@ -61,7 +60,7 @@ async function getPersistentTensileCache() {
     const cached = await store.get(TENSILE_CACHE_KEY, { type: 'json' });
     if (!cached?.files || !cached?.ts) return null;
     const age = Date.now() - cached.ts;
-    return { ...cached, age, fresh: age < PERSISTENT_CACHE_TTL };
+    return { ...cached, age };
   } catch (e) {
     console.warn('[cache] Netlify Blobs read failed:', e.message);
     return null;
@@ -75,7 +74,7 @@ async function setPersistentTensileCache(files) {
     await store.setJSON(TENSILE_CACHE_KEY, {
       files,
       ts: Date.now(),
-      ttlMs: PERSISTENT_CACHE_TTL,
+      cachePolicy: 'manual-refresh-only',
     });
     return true;
   } catch (e) {
@@ -234,14 +233,26 @@ function cleanMachineCSV(rawRows, headerCells = null) {
   return { rows, columns: Object.keys(colMap), meta: { thickness, width } };
 }
 
-// Downsample rows to at most MAX_POINTS using stride sampling.
+// Downsample rows using a shared total point budget. Netlify Functions have a
+// hard response-size limit, so per-file point count must shrink as file count grows.
+const MAX_POINTS_PER_FILE = 2000;
+const MAX_TOTAL_POINTS = 12000;
+const MIN_POINTS_PER_FILE = 100;
+
+function getMaxPointsPerFile(fileCount) {
+  if (!fileCount) return MAX_POINTS_PER_FILE;
+  return Math.min(
+    MAX_POINTS_PER_FILE,
+    Math.max(MIN_POINTS_PER_FILE, Math.floor(MAX_TOTAL_POINTS / fileCount))
+  );
+}
+
 // Always keeps the first and last point so curve endpoints are preserved.
-const MAX_POINTS = 2000;
-function downsample(rows) {
-  if (rows.length <= MAX_POINTS) return rows;
-  const stride = rows.length / MAX_POINTS;
+function downsample(rows, maxPoints = MAX_POINTS_PER_FILE) {
+  if (rows.length <= maxPoints) return rows;
+  const stride = rows.length / maxPoints;
   const out = [];
-  for (let i = 0; i < MAX_POINTS - 1; i++) {
+  for (let i = 0; i < maxPoints - 1; i++) {
     out.push(rows[Math.round(i * stride)]);
   }
   out.push(rows[rows.length - 1]); // always include last point
@@ -260,6 +271,7 @@ async function fetchTensileCSVs() {
     const ext = name.toLowerCase().match(/\.(csv|txt|xlsx|xls)$/)?.[1];
     return !!ext;
   });
+  const maxPoints = getMaxPointsPerFile(fileBlocks.length);
 
   // Fetch all files in parallel (avoids sequential timeout on Netlify)
   const results = await Promise.all(fileBlocks.map(async block => {
@@ -287,14 +299,20 @@ async function fetchTensileCSVs() {
         }
       }
       const { rows, columns, meta } = cleanMachineCSV(rawRows, headerCells);
-      const sampledRows = downsample(rows);
+      const sampledRows = downsample(rows, maxPoints);
       return {
         id: block.id,
         name: originalName,
         originalName,
         rows: sampledRows,
         columns,
-        meta: { ...meta, totalPoints: rows.length, createdTime: block.created_time, lastEditedTime: block.last_edited_time },
+        meta: {
+          ...meta,
+          totalPoints: rows.length,
+          sampledPoints: sampledRows.length,
+          createdTime: block.created_time,
+          lastEditedTime: block.last_edited_time,
+        },
       };
     } catch (e) {
       return {
@@ -333,7 +351,7 @@ app.get('/api/tensile', async (req, res) => {
     }
 
     const persistentCached = await getPersistentTensileCache();
-    if (persistentCached?.fresh) {
+    if (persistentCached?.files?.length) {
       setMemoryCache('tensile', persistentCached.files);
       return res.json({
         success: true,

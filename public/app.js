@@ -159,16 +159,14 @@ async function init() {
 /* ═══════════════════════════════════════
    BROWSER CACHE  (localStorage)
 ═══════════════════════════════════════ */
-const BROWSER_CACHE_KEY = 'lab-tensile-cache-v3';
-const BROWSER_CACHE_TTL = 6 * 60 * 60 * 1000;
+const BROWSER_CACHE_KEY = 'lab-tensile-cache-v4';
 
 function getBrowserCache() {
   try {
     const raw = localStorage.getItem(BROWSER_CACHE_KEY);
     if (!raw) return null;
     const { files, ts } = JSON.parse(raw);
-    if (Date.now() - ts > BROWSER_CACHE_TTL) { localStorage.removeItem(BROWSER_CACHE_KEY); return null; }
-    return files;
+    return Array.isArray(files) && ts ? files : null;
   } catch { return null; }
 }
 

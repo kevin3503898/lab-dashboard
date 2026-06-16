@@ -130,20 +130,19 @@ All routes are also exposed via the serverless wrapper at `/.netlify/functions/a
 ```js
 const cache = new Map();                         // warm function invocations only
 const MEMORY_CACHE_TTL = 25 * 60 * 1000;
-const PERSISTENT_CACHE_TTL = 6 * 60 * 60 * 1000; // Netlify Blobs
 ```
 
 `/api/tensile` uses three cache layers to reduce Netlify credit usage:
 
 1. Netlify CDN headers for short-lived shared response caching.
 2. In-memory `Map` for warm function invocations.
-3. Netlify Blobs store `lab-dashboard-cache` key `tensile-cache-v2` for persistent 6-hour data caching.
+3. Netlify Blobs store `lab-dashboard-cache` key `tensile-cache-v3` for persistent manual-refresh-only data caching.
 
-The browser also stores parsed tensile data in `localStorage['lab-tensile-cache-v3']` for 6 hours. The frontend should load this cache first and only call `/api/tensile` when no local cache exists. The refresh button must call `/api/tensile?refresh=1`.
+The browser also stores parsed tensile data in `localStorage['lab-tensile-cache-v4']` without automatic expiry. The frontend should load this cache first and only call `/api/tensile` when no local cache exists. The refresh button must call `/api/tensile?refresh=1`.
 
 ### Downsampling
 
-`fetchTensileCSVs` downsamples every file to at most **2000 points** (stride-based, preserving first and last points) to stay under Netlify's **6 MB response payload limit**. Do not remove this — large CSV files will cause `Function.ResponseSizeTooLarge` (HTTP 502).
+`fetchTensileCSVs` uses a shared point budget of **12000 total points**. Each file is capped at `floor(12000 / fileCount)`, up to 2000 points and down to 100 points minimum (stride-based, preserving first and last points). Do not remove this — large CSV collections will cause `Function.ResponseSizeTooLarge` (HTTP 502).
 
 ### Parallel fetch
 
@@ -174,7 +173,7 @@ const state = {
 | `lab-tensile-tag-colors` | `{ tagName: '#hex' }` — tag colours |
 | `lab-display-names` | `{ fileName: displayName }` — rename overrides |
 | `lab-manual-files` | `[fileName, ...]` — tracks manually-uploaded files |
-| `lab-tensile-cache-v3` | `{ files: [...], ts: timestamp }` — 6-hour client-side tensile cache |
+| `lab-tensile-cache-v4` | `{ files: [...], ts: timestamp }` — persistent client-side tensile cache; refreshed only by the Notion update button |
 
 ### Chart rendering
 
@@ -276,7 +275,7 @@ There are no CI checks or test suites configured. Verify changes locally before 
 
 ### What to watch out for when editing
 
-1. **Response size limit (6 MB).** The `downsample(rows)` call in `fetchTensileCSVs` and `POST /api/upload-csv` must stay in place. If you add a new data endpoint that returns raw rows, apply `downsample()` there too.
+1. **Response size limit (6 MB).** The dynamic `downsample(rows, maxPoints)` call in `fetchTensileCSVs` and the `downsample(rows)` call in `POST /api/upload-csv` must stay in place. If you add a new data endpoint that returns raw rows, apply downsampling there too.
 
 2. **Parallel file fetching.** `Promise.all` in `fetchTensileCSVs` is intentional and critical for Netlify's timeout. Never convert it back to a `for` / `await` sequential loop.
 
