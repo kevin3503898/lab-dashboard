@@ -110,6 +110,8 @@ The frontend re-detects columns from the standardised names returned by the serv
 
 Samples without a positive `meta.thickness` value are marked `無厚度資訊` in the selector. Selecting any such sample forces the chart to Force–Displacement mode and disables the chart-type toggle; stress-derived metrics must remain `N/A` instead of using a fallback thickness.
 
+When stress is computed from `Force (N)` and sample area in `mm²`, label it as `Stress (MPa)`: `N/mm²` is numerically equivalent to `MPa`.
+
 ---
 
 ## 5. Backend API (`server.js`)
@@ -195,6 +197,10 @@ const maxStrain = pairs[maxStressIdx].strain;  // strain at max stress, not max 
 ### Display names
 
 Always use `getDisplayName(fileName)` when displaying a file name in the UI. Never use `f.name` directly for labels — it bypasses rename overrides stored in `localStorage['lab-display-names']`. The original `f.name` is preserved for API calls and hover tooltips.
+
+### Sample selector
+
+`renderFileSelector()` renders a horizontally scrollable month filter above the sample list. The sample list itself is height-limited by CSS and scrolls internally, so do not remove `.file-selector-scroll` or the `.tl-grow` fixed-height behavior when adding more selector controls.
 
 ---
 

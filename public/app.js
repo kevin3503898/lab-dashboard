@@ -10,6 +10,7 @@ const state = {
   selectedFiles: new Set(),
   viewMode:     'single',
   tagFilter:    new Set(),   // multi-select: Set of active tag names
+  monthFilter:  'all',
   newTagColor:  '#3b82f6',
   paletteOpen:     false,       // tag color picker popover
   healingA:        null,        // sample name for healing calc
@@ -131,10 +132,26 @@ const BASE_LAYOUT = {
   },
 };
 
+function formatHoverNumber(value, digits = 3) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '';
+  return Number(num.toFixed(digits)).toString();
+}
+
+function getHoverUnit(title) {
+  const match = String(title || '').match(/\(([^)]+)\)/);
+  return match ? match[1] : '';
+}
+
 /* ═══════════════════════════════════════
    INIT
 ═══════════════════════════════════════ */
 async function init() {
+  if (window.location.protocol === 'file:') {
+    window.location.replace('http://localhost:3000/');
+    return;
+  }
+
   setupTabs();
   setupChartBtns();
   setupModeButtons();
@@ -376,18 +393,95 @@ function startRename(fileName, e) {
   input.focus();
 }
 
+function getFileTimestamp(file) {
+  const raw = file?.meta?.lastEditedTime || file?.meta?.createdTime;
+  const time = raw ? new Date(raw).getTime() : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function getFileMonthKey(file) {
+  const time = getFileTimestamp(file);
+  if (!time) return 'unknown';
+  const d = new Date(time);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function getMonthLabel(monthKey) {
+  if (monthKey === 'all') return '全部';
+  if (monthKey === 'unknown') return '未分類';
+  const [year, month] = monthKey.split('-');
+  const thisYear = new Date().getFullYear().toString();
+  return year === thisYear ? `${Number(month)}月` : `${year}/${month}`;
+}
+
+function getTagFilteredFiles() {
+  const tags = getTags();
+  return state.tagFilter.size > 0
+    ? state.tensileFiles.filter(f =>
+        [...state.tagFilter].some(t => (tags[t] || []).includes(f.name)))
+    : state.tensileFiles;
+}
+
+function getMonthFilteredFiles(files) {
+  return (state.monthFilter === 'all'
+    ? files
+    : files.filter(f => getFileMonthKey(f) === state.monthFilter))
+    .slice()
+    .sort((a, b) => getFileTimestamp(b) - getFileTimestamp(a));
+}
+
+function syncSelectionToVisibleFiles(files) {
+  const visibleNames = new Set(files.map(f => f.name));
+  const selectedVisible = [...state.selectedFiles].filter(name => visibleNames.has(name));
+
+  if (state.viewMode === 'single') {
+    state.selectedFiles = new Set(selectedVisible.length ? [selectedVisible[0]] : files[0] ? [files[0].name] : []);
+    return;
+  }
+
+  state.selectedFiles = new Set(selectedVisible);
+  if (!state.selectedFiles.size && files[0]) state.selectedFiles.add(files[0].name);
+}
+
+function setMonthFilter(monthKey) {
+  state.monthFilter = monthKey;
+  const visibleFiles = getMonthFilteredFiles(getTagFilteredFiles());
+  syncSelectionToVisibleFiles(visibleFiles);
+  syncChartToggle();
+  renderFileSelector();
+  renderTagSection();
+  if (state.tensileFiles.length) renderTensileChart();
+}
+
 function renderFileSelector() {
   const el = document.getElementById('file-selector');
   if (!el) return;
 
   const tags = getTags();
-  const source = state.tagFilter.size > 0
-    ? state.tensileFiles.filter(f =>
-        [...state.tagFilter].some(t => (tags[t] || []).includes(f.name)))
-    : state.tensileFiles;
+  const taggedSource = getTagFilteredFiles();
+  const monthKeys = [...new Set(taggedSource.map(getFileMonthKey))]
+    .sort((a, b) => {
+      if (a === 'unknown') return 1;
+      if (b === 'unknown') return -1;
+      return b.localeCompare(a);
+    });
+
+  if (state.monthFilter !== 'all' && !monthKeys.includes(state.monthFilter)) {
+    state.monthFilter = 'all';
+  }
+
+  const monthTabs = `
+    <div class="month-filter" aria-label="Filter samples by month">
+      ${['all', ...monthKeys].map(key => `
+        <button class="month-filter-btn ${state.monthFilter === key ? 'active' : ''}"
+          onclick="setMonthFilter(${esc(key)})">${getMonthLabel(key)}</button>
+      `).join('')}
+    </div>`;
+
+  const source = getMonthFilteredFiles(taggedSource);
 
   if (!source.length) {
-    el.innerHTML = `<div class="file-selector-list"><p class="hint" style="padding:6px 2px">${state.tagFilter.size > 0 ? 'No samples in selected tags' : 'No samples loaded'}</p></div>`;
+    el.innerHTML = `${monthTabs}<div class="file-selector-scroll"><div class="file-selector-list"><p class="hint" style="padding:6px 2px">${state.tagFilter.size > 0 ? 'No samples in selected tags' : 'No samples loaded'}</p></div></div>`;
     return;
   }
 
@@ -431,7 +525,7 @@ function renderFileSelector() {
       </button>`;
   }).join('');
 
-  el.innerHTML = `<div class="file-selector-list">${items}</div>`;
+  el.innerHTML = `${monthTabs}<div class="file-selector-scroll"><div class="file-selector-list">${items}</div></div>`;
 }
 
 async function deleteManualFile(name) {
@@ -744,6 +838,48 @@ function getAutoLegendLayout(traces) {
   };
 }
 
+function setupPlotHoverLabel(gd, xTitle) {
+  if (typeof gd.removeAllListeners === 'function') {
+    gd.removeAllListeners('plotly_hover');
+    gd.removeAllListeners('plotly_unhover');
+  }
+
+  const oldLabel = gd.querySelector('.plot-hover-x-label');
+  if (oldLabel) oldLabel.remove();
+
+  const label = document.createElement('div');
+  label.className = 'plot-hover-x-label';
+  gd.appendChild(label);
+
+  const xName = String(xTitle || '').replace(/\s*\([^)]*\)/, '');
+  const xUnit = getHoverUnit(xTitle);
+
+  const hideLabel = () => label.classList.remove('show');
+  const showLabel = event => {
+    const point = event?.points?.[0];
+    const xAxis = gd._fullLayout?.xaxis;
+    const yAxis = gd._fullLayout?.yaxis;
+    if (!point || !xAxis || typeof xAxis.l2p !== 'function') {
+      hideLabel();
+      return;
+    }
+
+    const plotLeft = xAxis._offset ?? gd._fullLayout._size?.l ?? 0;
+    const plotWidth = xAxis._length ?? gd._fullLayout._size?.w ?? gd.clientWidth;
+    const plotTop = yAxis?._offset ?? gd._fullLayout._size?.t ?? 0;
+    const xPos = plotLeft + xAxis.l2p(point.x);
+    const clampedX = Math.max(plotLeft + 18, Math.min(plotLeft + plotWidth - 18, xPos));
+
+    label.textContent = `${xName}: ${formatHoverNumber(point.x, 2)}${xUnit ? ` ${xUnit}` : ''}`;
+    label.style.left = `${clampedX}px`;
+    label.style.top = `${Math.max(2, plotTop - 22)}px`;
+    label.classList.add('show');
+  };
+
+  gd.on('plotly_hover', showLabel);
+  gd.on('plotly_unhover', hideLabel);
+}
+
 async function renderTensileChart() {
   const el = document.getElementById('chart-tensile');
   if (!state.tensileFiles.length) return;
@@ -773,7 +909,8 @@ async function renderTensileChart() {
       } else if (cols.displacement && cols.force) {
         xRaw   = file.rows.map(r => (parseFloat(r[cols.displacement]) / p.gaugeLength) * 100);
         yRaw   = file.rows.map(r => parseFloat(r[cols.force]) / area);
-        xTitle = 'Strain (%)'; yTitle = 'Stress (N/mm²)';
+        // Force / area gives N/mm², which is numerically equivalent to MPa.
+        xTitle = 'Strain (%)'; yTitle = 'Stress (MPa)';
       }
     } else {
       if (cols.displacement && cols.force) {
@@ -803,13 +940,21 @@ async function renderTensileChart() {
 
     const pts = xRaw.map((x,i) => ({x, y: yRaw[i]}))
       .filter(pt => isFinite(pt.x) && isFinite(pt.y));
+    const traceColor = PALETTE[idx % PALETTE.length];
+    const yUnit = getHoverUnit(yTitle);
+    const hoverValue = `${yTitle.replace(/\s*\([^)]*\)/, '')}: %{y:.4f}${yUnit ? ` ${yUnit}` : ''}`;
 
     traces.push({
       x: pts.map(pt => pt.x),
       y: pts.map(pt => pt.y),
       mode: 'lines', name: label,
-      line: { color: PALETTE[idx % PALETTE.length], width: 2.5 },
-      hovertemplate: `<b>${label}</b><br>${xTitle}: %{x:.3f}<br>${yTitle}: %{y:.4f}<extra></extra>`,
+      line: { color: traceColor, width: 2.5 },
+      hovertemplate: `${hoverValue}<extra></extra>`,
+      hoverlabel: {
+        bgcolor: traceColor,
+        bordercolor: traceColor,
+        font: { size: 11, color: '#ffffff', family: 'Arial, Helvetica, sans-serif' },
+      },
     });
 
     const m    = calcMetrics(file);
@@ -826,15 +971,26 @@ async function renderTensileChart() {
 
   const layout = {
     ...BASE_LAYOUT,
-    xaxis: { ...PUB_AXIS, title: { text: xTitle, font: { size: 22, color: '#000000' }, standoff: 10 }, ...(xAxisRange ? { range: xAxisRange } : {}) },
+    xaxis: {
+      ...PUB_AXIS,
+      title: { text: xTitle, font: { size: 22, color: '#000000' }, standoff: 10 },
+      showspikes: true,
+      spikemode: 'across',
+      spikesnap: 'cursor',
+      spikecolor: 'rgba(36,33,29,0.35)',
+      spikethickness: 1,
+      spikedash: 'solid',
+      ...(xAxisRange ? { range: xAxisRange } : {})
+    },
     yaxis: { ...PUB_AXIS, title: { text: yTitle, font: { size: 22, color: '#000000' }, standoff: 10 }, ...(yAxisRange ? { range: yAxisRange } : {}) },
-    hovermode: isOverlay ? 'x unified' : 'closest',
+    hovermode: 'x',
     legend: autoLegend.legend,
     showlegend: isOverlay,
   };
 
   el.innerHTML = '';
   await Plotly.newPlot('chart-tensile', traces, layout, PLOTLY_CONFIG);
+  setupPlotHoverLabel(el, xTitle);
   renderMetricsTable();
   renderHealingCalc(state.tensileFiles.filter(f => state.selectedFiles.has(f.name)));
 }
