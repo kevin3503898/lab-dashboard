@@ -17,6 +17,11 @@ const state = {
   healingB:        null,
   healingDropOpen: null,        // 'A' | 'B' | null
   healingOpen:     false,
+  tags:            {},
+  tagColors:       {},
+  tagsLoaded:      false,
+  tagSaveTimer:    null,
+  fileSelectorScrollTop: 0,
 };
 
 /* Chart data palette — vivid for readability */
@@ -54,23 +59,136 @@ function makeDraggable(el, handle) {
   };
 }
 
-/* ── Tag localStorage helpers ── */
-function getTags() {
+/* ── Shared tag helpers ── */
+function getLocalTags() {
   try { return JSON.parse(localStorage.getItem('lab-tensile-tags') || '{}'); }
   catch { return {}; }
 }
-function setTags(t) { localStorage.setItem('lab-tensile-tags', JSON.stringify(t)); }
+function setLocalTags(t) { localStorage.setItem('lab-tensile-tags', JSON.stringify(t)); }
 
-function getTagColors() {
+function getLocalTagColors() {
   try { return JSON.parse(localStorage.getItem('lab-tensile-tag-colors') || '{}'); }
   catch { return {}; }
 }
+
+function setLocalTagColors(colors) {
+  localStorage.setItem('lab-tensile-tag-colors', JSON.stringify(colors));
+}
+
+function normalizeTags(input = {}) {
+  const out = {};
+  Object.entries(input || {}).forEach(([rawName, rawFiles]) => {
+    const name = String(rawName || '').trim().slice(0, 20);
+    if (!name || !Array.isArray(rawFiles)) return;
+    out[name] = [...new Set(rawFiles.map(file => String(file || '').trim()).filter(Boolean))];
+  });
+  return out;
+}
+
+function normalizeTagColors(input = {}) {
+  const out = {};
+  Object.entries(input || {}).forEach(([rawName, rawColor]) => {
+    const name = String(rawName || '').trim().slice(0, 20);
+    const color = String(rawColor || '').trim();
+    if (name && color) out[name] = color.slice(0, 32);
+  });
+  return out;
+}
+
+function hasAnyTagData(tags, colors) {
+  return Object.keys(tags || {}).length > 0 || Object.keys(colors || {}).length > 0;
+}
+
+function applyTagState(tags, colors, options = {}) {
+  state.tags = normalizeTags(tags);
+  state.tagColors = normalizeTagColors(colors);
+  Object.keys(state.tags).forEach(name => {
+    if (!state.tagColors[name]) state.tagColors[name] = '#7b90a8';
+  });
+  setLocalTags(state.tags);
+  setLocalTagColors(state.tagColors);
+  if (options.persist) scheduleTagSave();
+}
+
+function getTags() { return state.tags || {}; }
+
+function setTags(tags, options = { persist: true }) {
+  applyTagState(tags, state.tagColors, options);
+}
+
+function getTagColors() { return state.tagColors || {}; }
+
+function setTagColors(colors, options = { persist: true }) {
+  applyTagState(state.tags, colors, options);
+}
+
 function saveTagColor(name, color) {
-  const c = getTagColors(); c[name] = color;
-  localStorage.setItem('lab-tensile-tag-colors', JSON.stringify(c));
+  const c = getTagColors();
+  c[name] = color;
+  setTagColors(c);
 }
 function getTagColorFor(name) {
   return getTagColors()[name] || '#7b90a8';
+}
+
+function pruneTagsToExistingFiles(validNames) {
+  const tags = getTags();
+  let changed = false;
+  const pruned = {};
+
+  Object.entries(tags).forEach(([name, files]) => {
+    const kept = (files || []).filter(fileName => validNames.has(fileName));
+    pruned[name] = kept;
+    if (kept.length !== (files || []).length) changed = true;
+  });
+
+  if (changed) setTags(pruned);
+}
+
+async function loadSharedTags() {
+  const localTags = getLocalTags();
+  const localColors = getLocalTagColors();
+  let shouldMigrateLocal = false;
+  try {
+    const r = await fetch('/api/tags', { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error || 'tag API failed');
+
+    const remoteTags = normalizeTags(d.tags);
+    const remoteColors = normalizeTagColors(d.colors);
+    if (hasAnyTagData(remoteTags, remoteColors)) {
+      applyTagState(remoteTags, remoteColors, { persist: false });
+    } else {
+      applyTagState(localTags, localColors, { persist: false });
+      shouldMigrateLocal = hasAnyTagData(localTags, localColors);
+    }
+  } catch (e) {
+    console.warn('[tags] Shared tag load failed, using local backup:', e.message);
+    applyTagState(localTags, localColors, { persist: false });
+  } finally {
+    state.tagsLoaded = true;
+    if (shouldMigrateLocal) scheduleTagSave();
+  }
+}
+
+function scheduleTagSave() {
+  if (!state.tagsLoaded) return;
+  clearTimeout(state.tagSaveTimer);
+  state.tagSaveTimer = setTimeout(saveSharedTags, 350);
+}
+
+async function saveSharedTags() {
+  try {
+    const r = await fetch('/api/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: state.tags, colors: state.tagColors }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  } catch (e) {
+    console.warn('[tags] Shared tag save failed; local backup is still kept:', e.message);
+  }
 }
 
 function getManualFiles() {
@@ -170,6 +288,7 @@ async function init() {
       renderTagSection();
     }
   });
+  await loadSharedTags();
   await loadCachedOrFetch();
 }
 
@@ -237,6 +356,7 @@ function syncTensileState(files) {
   });
   if (state.healingA && !validNames.has(state.healingA)) state.healingA = null;
   if (state.healingB && !validNames.has(state.healingB)) state.healingB = null;
+  pruneTagsToExistingFiles(validNames);
 }
 
 /* ═══════════════════════════════════════
@@ -445,17 +565,34 @@ function syncSelectionToVisibleFiles(files) {
 
 function setMonthFilter(monthKey) {
   state.monthFilter = monthKey;
+  state.fileSelectorScrollTop = 0;
   const visibleFiles = getMonthFilteredFiles(getTagFilteredFiles());
   syncSelectionToVisibleFiles(visibleFiles);
   syncChartToggle();
-  renderFileSelector();
+  renderFileSelector({ preserveScroll: false });
   renderTagSection();
   if (state.tensileFiles.length) renderTensileChart();
 }
 
-function renderFileSelector() {
+function getCurrentFileSelectorScrollTop() {
+  const scroller = document.querySelector('#file-selector .file-selector-scroll');
+  return scroller ? scroller.scrollTop : state.fileSelectorScrollTop;
+}
+
+function finalizeFileSelectorRender(scrollTop) {
+  const scroller = document.querySelector('#file-selector .file-selector-scroll');
+  if (!scroller) return;
+  scroller.scrollTop = Math.max(0, scrollTop || 0);
+  scroller.addEventListener('scroll', () => {
+    state.fileSelectorScrollTop = scroller.scrollTop;
+  }, { passive: true });
+}
+
+function renderFileSelector(options = {}) {
   const el = document.getElementById('file-selector');
   if (!el) return;
+  const preserveScroll = options.preserveScroll !== false;
+  const previousScrollTop = preserveScroll ? getCurrentFileSelectorScrollTop() : 0;
 
   const tags = getTags();
   const taggedSource = getTagFilteredFiles();
@@ -482,6 +619,7 @@ function renderFileSelector() {
 
   if (!source.length) {
     el.innerHTML = `${monthTabs}<div class="file-selector-scroll"><div class="file-selector-list"><p class="hint" style="padding:6px 2px">${state.tagFilter.size > 0 ? 'No samples in selected tags' : 'No samples loaded'}</p></div></div>`;
+    finalizeFileSelectorRender(previousScrollTop);
     return;
   }
 
@@ -526,6 +664,7 @@ function renderFileSelector() {
   }).join('');
 
   el.innerHTML = `${monthTabs}<div class="file-selector-scroll"><div class="file-selector-list">${items}</div></div>`;
+  finalizeFileSelectorRender(previousScrollTop);
 }
 
 async function deleteManualFile(name) {
@@ -575,6 +714,7 @@ function renderTagSection() {
   if (!el) return;
   const tags  = getTags();
   const names = Object.keys(tags);
+  const selectedNames = getSelectedFileNames();
 
   /* 1 — Filter pills */
   const clearBtn = state.tagFilter.size > 0
@@ -595,18 +735,20 @@ function renderTagSection() {
       </div>
     </div>` : '';
 
-  /* 2 — Assign tags to selected sample */
-  const selName  = [...state.selectedFiles][0] || null;
-  const selLabel = selName ? getDisplayName(selName) : null;
-  const assignHTML = (selName && names.length) ? `
+  /* 2 — Assign tags to selected samples */
+  const selectedLabel = getSelectedTagLabel(selectedNames);
+  const assignHTML = (selectedNames.length && names.length) ? `
     <div class="tag-section-group">
-      <div class="tag-section-label">Assign to <span class="tag-assign-selected">${selLabel}</span></div>
+      <div class="tag-section-label">Assign to <span class="tag-assign-selected">${selectedLabel}</span></div>
       <div class="tag-assign-list">
         ${names.map(t => {
-          const checked = (tags[t] || []).includes(selName);
-          return `<label class="tag-assign-item">
+          const assigned = tags[t] || [];
+          const checked = selectedNames.every(name => assigned.includes(name));
+          const partial = !checked && selectedNames.some(name => assigned.includes(name));
+          return `<label class="tag-assign-item ${partial ? 'partial' : ''}">
             <input type="checkbox" ${checked ? 'checked' : ''}
-              onchange="toggleSampleTag(${esc(selName)}, ${esc(t)})">
+              data-partial="${partial ? 'true' : 'false'}"
+              onchange="setTagForSelected(${esc(t)}, this.checked)">
             <span class="tag-assign-dot" style="background:${getTagColorFor(t)}"></span>
             <span>${t}</span>
           </label>`;
@@ -641,6 +783,24 @@ function renderTagSection() {
     </div>`;
 
   el.innerHTML = filterHTML + assignHTML + createHTML;
+  applyTagIndeterminateState();
+}
+
+function getSelectedFileNames() {
+  return state.tensileFiles
+    .filter(file => state.selectedFiles.has(file.name))
+    .map(file => file.name);
+}
+
+function getSelectedTagLabel(selectedNames) {
+  if (selectedNames.length === 1) return getDisplayName(selectedNames[0]);
+  return `${selectedNames.length} samples`;
+}
+
+function applyTagIndeterminateState() {
+  document.querySelectorAll('.tag-assign-item input[data-partial="true"]').forEach(input => {
+    input.indeterminate = true;
+  });
 }
 
 function selectTagColor(color) {
@@ -664,10 +824,13 @@ function addTag(name) {
   name = (name || '').trim().slice(0, 20);
   if (!name) return;
   const tags = getTags();
+  const selectedNames = getSelectedFileNames();
   if (!tags[name]) {
-    tags[name] = [];
+    tags[name] = selectedNames;
     setTags(tags);
     saveTagColor(name, state.newTagColor);
+  } else if (selectedNames.length) {
+    setTagForFiles(selectedNames, name, true);
   }
   state.paletteOpen = false;
   renderTagSection();
@@ -678,20 +841,34 @@ function addTag(name) {
 function deleteTag(name) {
   const tags = getTags(); delete tags[name]; setTags(tags);
   const cols = getTagColors(); delete cols[name];
-  localStorage.setItem('lab-tensile-tag-colors', JSON.stringify(cols));
+  setTagColors(cols);
   state.tagFilter.delete(name);
   renderTagSection();
   renderFileSelector();
 }
 
-function toggleSampleTag(fileName, tagName) {
+function setTagForFiles(fileNames, tagName, enabled) {
   const tags = getTags();
   if (!tags[tagName]) tags[tagName] = [];
-  const idx = tags[tagName].indexOf(fileName);
-  if (idx >= 0) tags[tagName].splice(idx, 1); else tags[tagName].push(fileName);
+  const assigned = new Set(tags[tagName]);
+  fileNames.forEach(fileName => {
+    if (enabled) assigned.add(fileName);
+    else assigned.delete(fileName);
+  });
+  tags[tagName] = [...assigned];
   setTags(tags);
   renderFileSelector();
   renderTagSection();
+}
+
+function setTagForSelected(tagName, enabled) {
+  setTagForFiles(getSelectedFileNames(), tagName, enabled);
+}
+
+function toggleSampleTag(fileName, tagName) {
+  const tags = getTags();
+  const assigned = tags[tagName] || [];
+  setTagForFiles([fileName], tagName, !assigned.includes(fileName));
 }
 
 function setTagFilter(name) {
@@ -701,13 +878,13 @@ function setTagFilter(name) {
     state.tagFilter.add(name);
   }
   renderTagSection();
-  renderFileSelector();
+  renderFileSelector({ preserveScroll: false });
 }
 
 function clearTagFilter() {
   state.tagFilter.clear();
   renderTagSection();
-  renderFileSelector();
+  renderFileSelector({ preserveScroll: false });
 }
 
 /* ── View mode (Single / Overlay) ── */

@@ -460,6 +460,7 @@ header h1 {
   display: flex; align-items: center; gap: 8px;
   font-size: 0.74rem; color: var(--text-2); cursor: pointer; user-select: none;
 }
+.tag-assign-item.partial { color: var(--text-1); }
 .tag-assign-item input[type=checkbox] {
   accent-color: var(--accent); cursor: pointer; flex-shrink: 0; width: 13px; height: 13px;
 }

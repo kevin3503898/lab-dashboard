@@ -24,6 +24,7 @@ if (process.env.NOTION_TOKEN) {
 const cache = new Map();
 const MEMORY_CACHE_TTL = 25 * 60 * 1000;
 const TENSILE_CACHE_KEY = 'tensile-cache-v3';
+const TAGS_CACHE_KEY = 'tensile-tags-v1';
 
 function getMemoryCache(key) {
   const entry = cache.get(key);
@@ -81,6 +82,71 @@ async function setPersistentTensileCache(files) {
     console.warn('[cache] Netlify Blobs write failed:', e.message);
     return false;
   }
+}
+
+function emptyTagState() {
+  return { tags: {}, colors: {}, updatedAt: null };
+}
+
+function sanitizeTagState(input = {}) {
+  const clean = emptyTagState();
+  const tags = input.tags && typeof input.tags === 'object' ? input.tags : {};
+  const colors = input.colors && typeof input.colors === 'object' ? input.colors : {};
+
+  Object.entries(tags).forEach(([rawName, rawFiles]) => {
+    const name = String(rawName || '').trim().slice(0, 20);
+    if (!name || !Array.isArray(rawFiles)) return;
+    clean.tags[name] = [...new Set(rawFiles
+      .map(file => String(file || '').trim())
+      .filter(Boolean)
+      .slice(0, 500))];
+  });
+
+  Object.entries(colors).forEach(([rawName, rawColor]) => {
+    const name = String(rawName || '').trim().slice(0, 20);
+    const color = String(rawColor || '').trim();
+    if (!name || !color) return;
+    clean.colors[name] = color.slice(0, 32);
+  });
+
+  Object.keys(clean.tags).forEach(name => {
+    if (!clean.colors[name]) clean.colors[name] = '#7b90a8';
+  });
+
+  clean.updatedAt = typeof input.updatedAt === 'string' ? input.updatedAt : null;
+  return clean;
+}
+
+async function getPersistentTagState() {
+  const store = getBlobStore();
+  if (!store) return getMemoryCache('tags') || emptyTagState();
+  try {
+    const cached = await store.get(TAGS_CACHE_KEY, { type: 'json' });
+    return sanitizeTagState(cached || {});
+  } catch (e) {
+    console.warn('[tags] Netlify Blobs read failed:', e.message);
+    return getMemoryCache('tags') || emptyTagState();
+  }
+}
+
+async function setPersistentTagState(input) {
+  const tagState = sanitizeTagState({ ...input, updatedAt: new Date().toISOString() });
+  setMemoryCache('tags', tagState);
+
+  const store = getBlobStore();
+  if (!store) return { tagState, stored: false };
+  try {
+    await store.setJSON(TAGS_CACHE_KEY, tagState);
+    return { tagState, stored: true };
+  } catch (e) {
+    console.warn('[tags] Netlify Blobs write failed:', e.message);
+    return { tagState, stored: false };
+  }
+}
+
+function setTagHeaders(res) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Netlify-CDN-Cache-Control', 'no-store');
 }
 
 function makeUniqueHeaders(headerCells = []) {
@@ -337,6 +403,26 @@ app.use(express.json({ limit: '20mb' }));
 
 app.get('/api/status', (req, res) => {
   res.json({ notionConnected: !!notion });
+});
+
+app.get('/api/tags', async (req, res) => {
+  setTagHeaders(res);
+  try {
+    const tagState = await getPersistentTagState();
+    res.json({ success: true, ...tagState });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.put('/api/tags', async (req, res) => {
+  setTagHeaders(res);
+  try {
+    const { tagState, stored } = await setPersistentTagState(req.body || {});
+    res.json({ success: true, stored, ...tagState });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 app.get('/api/tensile', async (req, res) => {
