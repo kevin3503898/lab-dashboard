@@ -22,6 +22,8 @@ const state = {
   tagsLoaded:      false,
   tagSaveTimer:    null,
   fileSelectorScrollTop: 0,
+  editingTag:      null,
+  tagDeleteTarget: null,
 };
 
 /* Chart data palette — vivid for readability */
@@ -37,6 +39,16 @@ const SWATCH_COLORS = [
 
 /* Safely embed JSON.stringify output inside a double-quoted HTML attribute */
 function esc(val) { return JSON.stringify(val).replace(/"/g, '&quot;'); }
+
+function escapeHTML(val) {
+  return String(val ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch]));
+}
 
 function makeDraggable(el, handle) {
   handle = handle || el;
@@ -641,7 +653,7 @@ function renderFileSelector(options = {}) {
 
     const assignedTags = Object.keys(tags).filter(t => (tags[t] || []).includes(f.name));
     const tagDotsHTML  = assignedTags.length
-      ? `<div class="file-btn-tags">${assignedTags.map(t => `<span class="file-tag-dot" style="background:${getTagColorFor(t)}"></span>`).join('')}</div>`
+      ? `<div class="file-btn-tags">${assignedTags.map(t => `<span class="file-tag-pill" style="--tc:${getTagColorFor(t)}" title="${escapeHTML(t)}"></span>`).join('')}</div>`
       : '';
 
     const delBtn = f.source === 'manual'
@@ -709,12 +721,16 @@ function toggleFile(name) {
 /* ═══════════════════════════════════════
    TAG PANEL
 ═══════════════════════════════════════ */
+let _tagClickTimer = null, _tagClickName = null;
+
 function renderTagSection() {
   const el = document.getElementById('tag-section');
   if (!el) return;
   const tags  = getTags();
   const names = Object.keys(tags);
   const selectedNames = getSelectedFileNames();
+  if (state.editingTag && !tags[state.editingTag]) state.editingTag = null;
+  if (state.tagDeleteTarget && !tags[state.tagDeleteTarget]) state.tagDeleteTarget = null;
 
   /* 1 — Filter pills */
   const clearBtn = state.tagFilter.size > 0
@@ -726,12 +742,22 @@ function renderTagSection() {
         <span>Filter by tag</span>${clearBtn}
       </div>
       <div class="tag-filter-pills">
-        ${names.map(t => `
-          <span class="tag-pill ${state.tagFilter.has(t) ? 'active' : ''}" style="--tc:${getTagColorFor(t)}"
-            onclick="setTagFilter(${esc(t)})">
-            ${t}
-            <button class="tag-pill-del" onclick="event.stopPropagation();deleteTag(${esc(t)})" title="Delete tag">🗑</button>
-          </span>`).join('')}
+        ${names.map(t => {
+          const editing = state.editingTag === t;
+          return `
+            <span class="tag-pill ${state.tagFilter.has(t) ? 'active' : ''} ${editing ? 'editing' : ''}"
+              style="--tc:${getTagColorFor(t)}"
+              title="Double-click to rename"
+              onclick="handleTagPillClick(event, ${esc(t)})">
+              ${editing
+                ? `<input class="tag-rename-input" value="${escapeHTML(t)}" maxlength="20"
+                    onclick="event.stopPropagation()"
+                    onkeydown="handleTagRenameKey(event, ${esc(t)}, this)"
+                    onblur="commitTagRename(${esc(t)}, this.value, this.dataset.cancel === 'true')">`
+                : `<span class="tag-pill-name">${escapeHTML(t)}</span>`}
+              <button class="tag-pill-del" onclick="event.stopPropagation();requestDeleteTag(${esc(t)})" title="Delete tag">🗑</button>
+            </span>`;
+        }).join('')}
       </div>
     </div>` : '';
 
@@ -750,7 +776,7 @@ function renderTagSection() {
               data-partial="${partial ? 'true' : 'false'}"
               onchange="setTagForSelected(${esc(t)}, this.checked)">
             <span class="tag-assign-dot" style="background:${getTagColorFor(t)}"></span>
-            <span>${t}</span>
+            <span>${escapeHTML(t)}</span>
           </label>`;
         }).join('')}
       </div>
@@ -782,8 +808,24 @@ function renderTagSection() {
       </div>
     </div>`;
 
-  el.innerHTML = filterHTML + assignHTML + createHTML;
+  const deleteModalHTML = state.tagDeleteTarget ? `
+    <div class="tag-confirm-backdrop" onclick="cancelDeleteTag()">
+      <div class="tag-confirm-dialog" onclick="event.stopPropagation()">
+        <div class="tag-confirm-title">Delete tag?</div>
+        <div class="tag-confirm-copy">
+          <span class="tag-confirm-chip" style="--tc:${getTagColorFor(state.tagDeleteTarget)}">${escapeHTML(state.tagDeleteTarget)}</span>
+          will be removed from every sample and saved permanently.
+        </div>
+        <div class="tag-confirm-actions">
+          <button class="tag-confirm-btn secondary" onclick="cancelDeleteTag()">Cancel</button>
+          <button class="tag-confirm-btn danger" onclick="confirmDeleteTag()">Delete</button>
+        </div>
+      </div>
+    </div>` : '';
+
+  el.innerHTML = filterHTML + assignHTML + createHTML + deleteModalHTML;
   applyTagIndeterminateState();
+  focusEditingTagInput();
 }
 
 function getSelectedFileNames() {
@@ -801,6 +843,79 @@ function applyTagIndeterminateState() {
   document.querySelectorAll('.tag-assign-item input[data-partial="true"]').forEach(input => {
     input.indeterminate = true;
   });
+}
+
+function focusEditingTagInput() {
+  if (!state.editingTag) return;
+  requestAnimationFrame(() => {
+    const input = document.querySelector('.tag-rename-input');
+    if (!input) return;
+    input.focus();
+    input.select();
+  });
+}
+
+function handleTagPillClick(event, name) {
+  if (event.target.closest('button,input')) return;
+  if (_tagClickName === name && _tagClickTimer) {
+    clearTimeout(_tagClickTimer);
+    _tagClickTimer = null;
+    _tagClickName = null;
+    startRenameTag(name);
+    return;
+  }
+  _tagClickName = name;
+  _tagClickTimer = setTimeout(() => {
+    _tagClickTimer = null;
+    _tagClickName = null;
+    setTagFilter(name);
+  }, 230);
+}
+
+function startRenameTag(name) {
+  state.editingTag = name;
+  state.tagDeleteTarget = null;
+  renderTagSection();
+}
+
+function handleTagRenameKey(event, oldName, input) {
+  event.stopPropagation();
+  if (event.key === 'Enter') input.blur();
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    input.dataset.cancel = 'true';
+    state.editingTag = null;
+    renderTagSection();
+  }
+}
+
+function commitTagRename(oldName, newName, cancelled = false) {
+  newName = (newName || '').trim().slice(0, 20);
+  state.editingTag = null;
+  if (cancelled || !newName || newName === oldName) {
+    renderTagSection();
+    return;
+  }
+
+  const tags = getTags();
+  const colors = getTagColors();
+  const oldFiles = tags[oldName] || [];
+  const mergedFiles = new Set([...(tags[newName] || []), ...oldFiles]);
+  tags[newName] = [...mergedFiles];
+  delete tags[oldName];
+
+  if (!colors[newName]) colors[newName] = colors[oldName] || '#7b90a8';
+  delete colors[oldName];
+
+  if (state.tagFilter.has(oldName)) {
+    state.tagFilter.delete(oldName);
+    state.tagFilter.add(newName);
+  }
+
+  setTags(tags);
+  setTagColors(colors);
+  renderTagSection();
+  renderFileSelector();
 }
 
 function selectTagColor(color) {
@@ -845,6 +960,23 @@ function deleteTag(name) {
   state.tagFilter.delete(name);
   renderTagSection();
   renderFileSelector();
+}
+
+function requestDeleteTag(name) {
+  state.tagDeleteTarget = name;
+  state.editingTag = null;
+  renderTagSection();
+}
+
+function cancelDeleteTag() {
+  state.tagDeleteTarget = null;
+  renderTagSection();
+}
+
+function confirmDeleteTag() {
+  const name = state.tagDeleteTarget;
+  state.tagDeleteTarget = null;
+  if (name) deleteTag(name);
 }
 
 function setTagForFiles(fileNames, tagName, enabled) {
